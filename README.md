@@ -121,3 +121,4 @@ To build systems where:
 
 > Life is not pre-programmed…
 > but emerges from the interaction between **rules and intelligence**.
+<img width="612" height="398" alt="image" src="https://github.com/user-attachments/assets/fae4d02c-f492-4537-bf3f-9541d9fba95a" />
