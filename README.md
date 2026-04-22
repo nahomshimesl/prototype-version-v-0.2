@@ -2,7 +2,7 @@ immportans this project is extra prototype not the full thing!
 
 This contains everything you need to run your app locally.
 
-View your app in : 
+View your app in : https://ai.studio/apps/ebf16807-76db-4a20-9077-827dc604f80e
 
 ## Run Locally
 
