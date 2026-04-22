@@ -1,4 +1,4 @@
-++++ allow me to introduce my self my name is nahom brhenu this idea a noval project of my make ur self at home and explore the idea 
+++++ allow me to introduce my self my name is nahom brhenu, this idea is a noval project of my, make ur self at home and explore the idea!
 
 
 immportans this project is extra prototype not the full thing!
