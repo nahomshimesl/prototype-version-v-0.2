@@ -36,3 +36,5 @@ To enable AI root-cause analysis, set `GEMINI_API_KEY` in environment. Without i
 ## Recent fixes
 - Removed duplicate `TelemetryEvent` import in `src/App.tsx`.
 - Server port changed from 3000 → 5000 (with `PORT` env override).
+- Triggered workspace re-sync to resolve deploy-side stale snapshot.
+
