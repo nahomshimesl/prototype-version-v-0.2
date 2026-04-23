@@ -1,12 +1,9 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
 
-# Run and deploy your AI Studio app
+# Run and deploy 
 
 This contains everything you need to run your app locally.
 
-View your app in AI Studio: https://ai.studio/apps/ebf16807-76db-4a20-9077-827dc604f80e
+View your app in AI Studio: https://ais-dev-o2o54thuyovllplpbyzkgo-324010202586.europe-west2.run.app
 
 ## Run Locally
 
@@ -15,6 +12,115 @@ View your app in AI Studio: https://ai.studio/apps/ebf16807-76db-4a20-9077-827dc
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set the  in [.env.local](.env.local) 
 3. Run the app:
    `npm run dev`
+# 🧬 Bio-Synthetic Intelligence Engine
+
+> What if biology didn’t run on DNA…
+> but on intelligence?
+
+This project explores a new computational paradigm:
+
+A **living system simulation** where each “organ” is not a passive component, but an **autonomous intelligent agent**.
+
+Instead of encoding behavior in static genetic sequences, this system replaces DNA with **dynamic, interacting micro-intelligences**—each capable of decision-making, communication, and adaptation.
+
+---
+
+## ⚙️ Core Concept
+
+* The system is composed of **50+ autonomous agents ("organs")**
+* Each agent:
+
+  * Maintains internal state (energy, memory, health)
+  * Communicates with other agents through structured signals
+  * Evolves behavior through interaction, not hardcoded rules
+* Global behavior emerges from **local interactions**
+
+This is not a simulation of biology.
+
+It is an attempt to **redefine it computationally**.
+
+---
+
+## 🌐 What Makes This Different
+
+Most simulations:
+
+* Use fixed rules
+* Follow deterministic models
+* Produce predictable outputs
+
+This system:
+
+* Enables **emergent behavior**
+* Produces **non-linear, evolving patterns**
+* Mimics properties of real living systems:
+
+  * self-organization
+  * instability
+  * adaptation
+  * collapse
+
+---
+
+## 🔁 Intelligence Instead of DNA
+
+Each “organ” is powered by a lightweight decision system (micro-LLM or hybrid model), meaning:
+
+* Behavior is **interpreted**, not pre-written
+* Interactions create **infinite pattern space**
+* The system can evolve beyond its initial design
+
+Inspired by natural systems, this engine aims to generate:
+
+* feedback loops
+* oscillations
+* fractal-like distributions (e.g. golden-ratio patterns)
+
+---
+
+## 🔮 Predictive Layer
+
+Beyond simulation, the system includes a **behavioral prediction module**:
+
+* Learns from system dynamics
+* Detects instability and anomaly formation
+* Predicts potential system collapse before it occurs
+
+---
+
+## 🧪 Why This Matters
+
+This project sits at the intersection of:
+
+* Artificial Life
+* Multi-Agent Systems
+* Computational Biology
+* Emergent Intelligence
+
+It is not just a tool.
+
+It is a **research platform** for exploring how intelligence itself can become the foundation of life-like systems.
+
+---
+
+## 🚧 Status
+
+Early-stage experimental system.
+
+Current focus:
+
+* Core agent architecture
+* Communication protocols
+* Simulation engine
+
+---
+
+## 🚀 Vision
+
+To build a system where:
+
+> Life is no longer simulated…
+> it **emerges** from intelligence itself.
