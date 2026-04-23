@@ -7,6 +7,7 @@ import * as React from 'react';
 import { ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, RefreshCcw } from 'lucide-react';
 import { healthEngine } from '../services/HealthEngine';
+import { SentinelClient } from '../services/SentinelClient';
 
 interface Props {
   children: ReactNode;
@@ -40,6 +41,16 @@ class ErrorBoundary extends (React.Component as any) {
       'CRITICAL',
       { componentStack: errorInfo.componentStack }
     );
+
+    // Report to Stability Sentinel
+    SentinelClient.report({
+      source: 'react-error-boundary',
+      kind: error.name || 'ReactError',
+      message: error.message,
+      stack: error.stack,
+      severity: 'CRITICAL',
+      context: { componentStack: errorInfo.componentStack },
+    });
   }
 
   public render() {

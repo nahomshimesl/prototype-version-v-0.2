@@ -20,6 +20,19 @@ React + Vite frontend with an Express + Socket.IO backend (single server).
 ## Auth
 - API endpoints gated by `APP_PASSWORD` env (defaults to `organoid2026`).
 
+## Stability Sentinel (reliability subsystem)
+
+A self-diagnosing reliability layer separate from the simulation-domain HealthEngine.
+
+- **Server**: `services/sentinel.ts` — fingerprint-based incident store (persisted to `.local/sentinel-store.json`), runtime anomaly detection (memory spikes, event-loop blocks, error-rate, recurring errors), AI root-cause analysis via Gemini with heuristic fallback, and a registry of approval-gated recovery actions (`acknowledge`, `resolve`, `retry`, `reset-client-state`, `gc-hint`). RISKY actions are blocked from auto-execution by design.
+- **REST**: `POST /api/sentinel/report` (unauthenticated, so client errors during auth failure still get captured), `GET /api/sentinel/{incidents,anomalies,stats,recovery-actions}`, `POST /api/sentinel/incidents/:id/{analyze,recover,acknowledge}` (auth required).
+- **Realtime**: emits `sentinel:incident`, `sentinel:anomaly`, `sentinel:analysis`, `sentinel:resolved`, `sentinel:retry-hint`, `sentinel:reset-state-hint` over Socket.IO.
+- **Client**: `src/services/SentinelClient.ts` installs `window.onerror` and `unhandledrejection` capture, maintains a rolling action history for diagnostic context, and exposes hooks for retry/reset events.
+- **UI**: `src/components/StabilitySentinel.tsx` — dashboard tab in the main app showing live stats, anomalies, incident list, AI analysis with ranked fix suggestions (confidence + safety badges), and approval-gated recovery buttons.
+- **Integration**: `src/components/ErrorBoundary.tsx` reports React errors to the Sentinel as well as the HealthEngine.
+
+To enable AI root-cause analysis, set `GEMINI_API_KEY` in environment. Without it, the Sentinel runs heuristic-only diagnoses.
+
 ## Recent fixes
 - Removed duplicate `TelemetryEvent` import in `src/App.tsx`.
 - Server port changed from 3000 → 5000 (with `PORT` env override).

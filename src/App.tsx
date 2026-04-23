@@ -24,6 +24,8 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 import TelemetryViewer from './components/TelemetryViewer';
 import DataAnalyzer from './components/DataAnalyzer';
+import StabilitySentinel from './components/StabilitySentinel';
+import { SentinelClient } from './services/SentinelClient';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -34,7 +36,7 @@ export default function App() {
   const [agents, setAgents] = useState<AgentState[]>([]);
   const [signals, setSignals] = useState<BioSignal[]>([]);
   const [isRunning, setIsRunning] = useState(false);
-  const [activeTab, setActiveTab] = useState<'SIMULATION' | 'GENETICS' | 'HEALTH' | 'POPULATION' | 'FULLSTACK' | 'TELEMETRY' | 'ANALYSIS'>('SIMULATION');
+  const [activeTab, setActiveTab] = useState<'SIMULATION' | 'GENETICS' | 'HEALTH' | 'POPULATION' | 'FULLSTACK' | 'TELEMETRY' | 'ANALYSIS' | 'SENTINEL'>('SIMULATION');
   const [telemetryEvents, setTelemetryEvents] = useState<TelemetryEvent[]>([]);
   const [dna, setDna] = useState<ManagerDNA>(createInitialDNA());
   const [health, setHealth] = useState<SystemHealthState>({
@@ -87,6 +89,9 @@ export default function App() {
     // Initialize Socket.io
     socketRef.current = io();
     socketRef.current.emit("join-session", "simulation-room-1");
+
+    // Install Stability Sentinel error capture + live event subscription
+    SentinelClient.install(socketRef.current);
 
     socketRef.current.on("health-update", (healthUpdate: any) => {
       // Potentially update health state or logs
@@ -711,6 +716,17 @@ export default function App() {
             title="Health Engine"
           >
             <ShieldAlert size={20} />
+          </button>
+          <button
+            onClick={() => setActiveTab('SENTINEL')}
+            className={`p-3 rounded-xl transition-all ${
+              activeTab === 'SENTINEL'
+                ? 'bg-emerald-800 text-emerald-300 shadow-inner'
+                : 'text-emerald-500 hover:text-emerald-300'
+            }`}
+            title="Stability Sentinel"
+          >
+            <ShieldAlert size={20} className="opacity-90" />
           </button>
           <button 
             onClick={() => setActiveTab('FULLSTACK')}
@@ -1390,6 +1406,16 @@ export default function App() {
                 className="h-full overflow-hidden"
               >
                 <TelemetryViewer metrics={metrics} events={telemetryEvents} />
+              </motion.div>
+            ) : activeTab === 'SENTINEL' ? (
+              <motion.div
+                key="sentinel"
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.02 }}
+                className="h-full overflow-y-auto p-4"
+              >
+                <StabilitySentinel />
               </motion.div>
             ) : null}
           </AnimatePresence>

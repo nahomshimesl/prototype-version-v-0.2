@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
+import { Sentinel } from "./services/sentinel.js";
 
 dotenv.config();
 
@@ -14,12 +15,28 @@ async function startServer() {
   const io = new Server(server);
   const PORT = Number(process.env.PORT) || 5000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: "256kb" }));
+
+  // ───────────── Stability Sentinel ─────────────
+  const sentinelAi = process.env.GEMINI_API_KEY
+    ? {
+        generate: async (prompt: string) => {
+          const { GoogleGenAI } = await import("@google/genai");
+          const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+          const res = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+          });
+          return res.text ?? "";
+        },
+      }
+    : null;
+  const sentinel = new Sentinel({ io, ai: sentinelAi });
 
   // Socket.io for Real-time Communication
   io.on("connection", (socket) => {
     console.log("Client connected:", socket.id);
-    
+
     socket.on("join-session", (sessionId) => {
       socket.join(sessionId);
       console.log(`Client ${socket.id} joined session ${sessionId}`);
@@ -32,7 +49,7 @@ async function startServer() {
 
   // Simple Password Protection Middleware
   const APP_PASSWORD = process.env.APP_PASSWORD || "organoid2026";
-  
+
   const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers.authorization;
     if (authHeader === `Bearer ${APP_PASSWORD}`) {
@@ -50,8 +67,6 @@ async function startServer() {
   app.post("/api/simulate", authMiddleware, (req, res) => {
     const { glucose, oxygen, aminoAcids, temperature } = req.body;
 
-    // Simulation logic: Metabolic Flux Model
-    // Simple heuristic for biological complexity
     const baseMetabolism = (glucose * 0.4) + (oxygen * 0.3) + (aminoAcids * 0.3);
     const tempStress = Math.abs(temperature - 37) * 0.05;
     const healthScore = Math.max(0, Math.min(100, (baseMetabolism * 10) - (tempStress * 20)));
@@ -84,7 +99,7 @@ async function startServer() {
 
   app.post("/api/system/health", authMiddleware, (req, res) => {
     systemHealth = { ...req.body, lastUpdate: new Date().toISOString() };
-    io.emit('health-update', systemHealth); // Emit real-time update
+    io.emit('health-update', systemHealth);
     res.json({ status: "updated" });
   });
 
@@ -96,8 +111,56 @@ async function startServer() {
     const log = { ...req.body, serverTimestamp: new Date().toISOString() };
     systemLogs.push(log);
     if (systemLogs.length > 500) systemLogs.shift();
-    io.emit('log-added', log); // Emit real-time log
+    io.emit('log-added', log);
     res.json({ status: "logged" });
+  });
+
+  // ───────────── Sentinel API ─────────────
+  // Reporting is intentionally unauthenticated so client errors during auth
+  // failures still get captured. Mutating endpoints require auth.
+
+  app.post("/api/sentinel/report", (req, res) => {
+    try {
+      const inc = sentinel.report({
+        source: String(req.body?.source ?? "browser"),
+        kind: req.body?.kind,
+        message: String(req.body?.message ?? "Unknown error"),
+        stack: req.body?.stack,
+        severity: req.body?.severity,
+        context: req.body?.context,
+        timestamp: req.body?.timestamp,
+      });
+      res.json({ ok: true, id: inc.id, fingerprint: inc.fingerprint, occurrences: inc.occurrences });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, error: e?.message });
+    }
+  });
+
+  app.get("/api/sentinel/incidents", (_req, res) => res.json(sentinel.list()));
+  app.get("/api/sentinel/incidents/:id", (req, res) => {
+    const inc = sentinel.get(req.params.id);
+    if (!inc) return res.status(404).json({ error: "Not found" });
+    res.json(inc);
+  });
+  app.get("/api/sentinel/anomalies", (_req, res) => res.json(sentinel.listAnomalies()));
+  app.get("/api/sentinel/stats", (_req, res) => res.json(sentinel.stats()));
+  app.get("/api/sentinel/recovery-actions", (_req, res) => res.json(sentinel.listRecoveryActions()));
+
+  app.post("/api/sentinel/incidents/:id/analyze", authMiddleware, async (req, res) => {
+    const analysis = await sentinel.analyze(req.params.id, Boolean(req.body?.force));
+    if (!analysis) return res.status(404).json({ error: "Not found" });
+    res.json(analysis);
+  });
+
+  app.post("/api/sentinel/incidents/:id/recover", authMiddleware, async (req, res) => {
+    const result = await sentinel.runRecovery(req.params.id, String(req.body?.action ?? ""));
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  app.post("/api/sentinel/incidents/:id/acknowledge", authMiddleware, (req, res) => {
+    const inc = sentinel.acknowledge(req.params.id);
+    if (!inc) return res.status(404).json({ error: "Not found" });
+    res.json({ ok: true });
   });
 
   // Vite middleware for development
@@ -117,6 +180,7 @@ async function startServer() {
 
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Stability Sentinel armed (AI ${sentinelAi ? "enabled" : "heuristic-only"})`);
   });
 }
 
