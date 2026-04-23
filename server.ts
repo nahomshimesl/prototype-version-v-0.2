@@ -8,9 +8,6 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
@@ -46,6 +43,10 @@ async function startServer() {
   };
 
   // Biological Simulation Endpoint
+  app.post("/api/auth/verify", authMiddleware, (req, res) => {
+    res.json({ success: true });
+  });
+
   app.post("/api/simulate", authMiddleware, (req, res) => {
     const { glucose, oxygen, aminoAcids, temperature } = req.body;
 

@@ -17,7 +17,6 @@ interface VisualizerProps {
 
 const Visualizer: React.FC<VisualizerProps> = ({ agents, signals, width, height }) => {
   const svgRef = useRef<SVGSVGElement>(null);
-  const simulationRef = useRef<d3.Simulation<any, any>>(null);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
@@ -63,16 +62,32 @@ const Visualizer: React.FC<VisualizerProps> = ({ agents, signals, width, height 
     agents.find(a => a.id === selectedAgentId),
   [agents, selectedAgentId]);
 
+  // Keep persistent simulation and references
+  const simulationRef = useRef<d3.Simulation<any, any> | null>(null);
+  const activeLinksRef = useRef<Map<string, any>>(new Map());
+  const activeNodesRef = useRef<Map<string, any>>(new Map());
+  const physicsArraysRef = useRef<{ nodes: any[], links: any[] }>({ nodes: [], links: [] });
+  const elementsRef = useRef<{
+    g: d3.Selection<SVGGElement, unknown, null, undefined>;
+    linkLayer: d3.Selection<SVGGElement, unknown, null, undefined>;
+    particleLayer: d3.Selection<SVGGElement, unknown, null, undefined>;
+    nodeLayer: d3.Selection<SVGGElement, unknown, null, undefined>;
+  } | null>(null);
+
+  // 1. Initial Setup ONLY
   useEffect(() => {
     if (!svgRef.current) return;
-
     const svg = d3.select(svgRef.current);
-    svg.selectAll('*').remove();
+    svg.selectAll('*').remove(); // Clear only on mount
 
-    // Create a container for all elements to enable zooming
     const g = svg.append('g');
+    const linkLayer = g.append('g');
+    const particleLayer = g.append('g');
+    const nodeLayer = g.append('g');
 
-    // Add filters for glow effect
+    elementsRef.current = { g, linkLayer, particleLayer, nodeLayer };
+
+    // Add filters
     const defs = svg.append('defs');
     const filter = defs.append('filter')
       .attr('id', 'glow')
@@ -81,56 +96,127 @@ const Visualizer: React.FC<VisualizerProps> = ({ agents, signals, width, height 
       .attr('width', '200%')
       .attr('height', '200%');
     
-    filter.append('feGaussianBlur')
-      .attr('stdDeviation', '2')
-      .attr('result', 'blur');
-    
+    filter.append('feGaussianBlur').attr('stdDeviation', '2').attr('result', 'blur');
     const feMerge = filter.append('feMerge');
     feMerge.append('feMergeNode').attr('in', 'blur');
     feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
 
-    // Setup Zoom
     const zoom = d3.zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.1, 5])
-      .on('zoom', (event) => {
-        g.attr('transform', event.transform);
-      });
-
+      .on('zoom', (event) => g.attr('transform', event.transform));
     svg.call(zoom);
 
-    // 1. Setup Simulation
-    // We create a copy of signals to avoid mutating the original state objects
-    const links = signals.map(s => ({ ...s }));
-    
-    const simulation = d3.forceSimulation(agents as any)
-      .force('link', d3.forceLink(links).id((d: any) => d.id).distance(100))
+    // Setup Simulation (runs continuously as alpha decays, then stops naturally)
+    const simulation = d3.forceSimulation()
+      .force('link', d3.forceLink().id((d: any) => d.id).distance(100))
       .force('charge', d3.forceManyBody().strength(-200))
       .force('center', d3.forceCenter(width / 2, height / 2))
       .force('collision', d3.forceCollide().radius(30));
 
     simulationRef.current = simulation;
 
-    // 2. Draw Signals (Links)
-    const link = g.append('g')
-      .selectAll('line')
-      .data(links)
-      .enter()
-      .append('line')
+    return () => {
+      simulation.stop();
+    };
+  }, [width, height]); // Re-run only if canvas heavily resizes
+
+  // 2. Data Update Loop (Runs on state change)
+  useEffect(() => {
+    if (!simulationRef.current || !elementsRef.current) return;
+    const { linkLayer, particleLayer, nodeLayer } = elementsRef.current;
+    const simulation = simulationRef.current;
+
+    // Use a stable reference of nodes so dragging (fx, fy) and physics (x, y) persist
+    const activeNodesMap = activeNodesRef.current;
+    let topologyChanged = false;
+    
+    // Cull dead agents
+    const incomingIds = new Set(agents.map(a => a.id));
+    for (const key of activeNodesMap.keys()) {
+      if (!incomingIds.has(key)) {
+        activeNodesMap.delete(key);
+        topologyChanged = true;
+      }
+    }
+
+    // Upsert or update existing agents with new simulation data (health, energy, etc)
+    agents.forEach(a => {
+      if (!activeNodesMap.has(a.id)) {
+        activeNodesMap.set(a.id, { ...a }); // Clone initial D3 object
+        topologyChanged = true;
+      } else {
+        const existing = activeNodesMap.get(a.id);
+        // Keep D3 physics fields unchanged, only overwrite simulation state
+        Object.assign(existing, a, {
+          x: existing.x, y: existing.y, 
+          fx: existing.fx, fy: existing.fy, 
+          vx: existing.vx, vy: existing.vy 
+        });
+      }
+    });
+
+    const physicsNodes = Array.from(activeNodesMap.values());
+
+    // Use a trailing visual buffer to keep signals visible for a bit
+    // because the backend simulation loop culls signals instantly
+    const activeLinksMap = activeLinksRef.current;
+    
+    // 1. Age and Cull old visual links
+    for (const [id, link] of activeLinksMap.entries()) {
+      link.age = (link.age || 0) + 1;
+      if (link.age > 40) {
+        activeLinksMap.delete(id);
+        topologyChanged = true;
+      }
+    }
+
+    // 2. Add new signal links
+    signals.forEach(s => {
+      if (!activeLinksMap.has(s.id)) {
+        // Clone so D3 physics can inject object refs safely
+        activeLinksMap.set(s.id, { ...s, age: 0 });
+        topologyChanged = true;
+      }
+    });
+
+    const linksData = Array.from(activeLinksMap.values());
+
+    if (topologyChanged) {
+      physicsArraysRef.current.nodes = physicsNodes;
+      physicsArraysRef.current.links = linksData;
+      // Apply data to physics engine WITHOUT restarting alpha artificially each frame, only when topology changes
+      simulation.nodes(physicsArraysRef.current.nodes as any);
+      (simulation.force('link') as any).links(physicsArraysRef.current.links);
+      
+      // Give a tiny nudge to adjust to new strings/nodes
+      if (simulation.alpha() < 0.05) simulation.alpha(0.05).restart();
+    }
+
+    // Ensure we only keep valid links where source/target were correctly matched
+    const validLinksData = physicsArraysRef.current.links.filter(d => typeof d.source === 'object' && typeof d.target === 'object');
+    
+    // Draw Links
+    const linkSelection = linkLayer.selectAll<SVGLineElement, any>('line')
+      .data(validLinksData, d => d.id)
+      .join('line')
       .attr('stroke', (d: any) => {
-        if (d.type === 'ATP') return '#10b981'; // Emerald
-        if (d.type === 'HORMONAL') return '#34d399'; // Emerald-400
-        if (d.type === 'CYTOKINE') return '#ef4444'; // Red
-        if (d.type === 'ALERT') return '#f43f5e'; // Rose-500 (Alert)
-        return '#059669'; // Emerald-600
-      })
-      .attr('stroke-dasharray', (d: any) => d.type === 'ALERT' ? '5,5' : 'none')
-      .attr('stroke-opacity', (d: any) => {
-        if (selectedSignalId && !tracedSignalIds.has(d.id)) return 0.05;
-        return d.isUrgent ? 0.3 : 0.1;
+        if (d.type === 'ATP') return '#10b981';
+        if (d.type === 'HORMONAL') return '#34d399';
+        if (d.type === 'CYTOKINE') return '#ef4444';
+        if (d.type === 'ALERT') return '#f43f5e';
+        return '#059669';
       })
       .attr('stroke-width', (d: any) => {
-        const baseWidth = Math.sqrt(d.payload) * (d.isUrgent ? 2 : 1);
+        const baseWidth = Math.max(2, Math.sqrt(d.payload) * (d.isUrgent ? 2 : 1.5));
         return tracedSignalIds.has(d.id) ? baseWidth * 2 : baseWidth;
+      })
+      .attr('stroke-opacity', (d: any) => {
+        if (selectedSignalId && !tracedSignalIds.has(d.id)) return 0.1;
+        return d.isUrgent ? 0.8 : 0.5;
+      })
+      .attr('stroke-dasharray', (d: any) => {
+        if (tracedSignalIds.has(d.id) || d.type === 'ALERT') return '5,5';
+        return 'none';
       })
       .attr('cursor', 'pointer')
       .on('click', (event, d: any) => {
@@ -138,33 +224,18 @@ const Visualizer: React.FC<VisualizerProps> = ({ agents, signals, width, height 
         setSelectedSignalId(d.id);
       });
 
-    // Add animation for traced signals
-    link.filter((d: any) => tracedSignalIds.has(d.id))
-      .attr('stroke-dasharray', '5,5')
-      .append('animate')
-      .attr('attributeName', 'stroke-dashoffset')
-      .attr('from', '100')
-      .attr('to', '0')
-      .attr('dur', '1s')
-      .attr('repeatCount', 'indefinite');
-
-    // 2.5 Draw Signal Particles (Trailing & Pulsating)
-    const particleData = links.flatMap(d => [
+    // Draw Particles
+    const particleData = linksData.flatMap(d => [
       { ...d, offset: 0, size: 1, opacity: 0.8 },
       { ...d, offset: 0.05, size: 0.7, opacity: 0.4 },
       { ...d, offset: 0.1, size: 0.4, opacity: 0.2 }
     ]);
 
-    const particle = g.append('g')
-      .selectAll('circle.signal-particle')
-      .data(particleData)
-      .enter()
-      .append('circle')
+    const particleSelection = particleLayer.selectAll<SVGCircleElement, any>('circle')
+      .data(particleData, d => `${d.id}-${d.offset}`)
+      .join('circle')
       .attr('class', (d: any) => `signal-particle ${d.isUrgent ? 'animate-pulse' : ''}`)
-      .attr('r', (d: any) => {
-        const baseRadius = Math.sqrt(d.payload) * 2.5;
-        return Math.max(2, baseRadius * d.size);
-      })
+      .attr('r', (d: any) => Math.max(2, (Math.sqrt(d.payload) * 2.5) * d.size))
       .attr('fill', (d: any) => {
         if (d.type === 'ATP') return '#10b981';
         if (d.type === 'HORMONAL') return '#34d399';
@@ -172,115 +243,146 @@ const Visualizer: React.FC<VisualizerProps> = ({ agents, signals, width, height 
         if (d.type === 'ALERT') return '#f43f5e';
         return '#059669';
       })
-      .attr('fill-opacity', (d: any) => {
-        if (selectedSignalId && !tracedSignalIds.has(d.id)) return 0.02;
-        return d.opacity;
-      })
+      .attr('fill-opacity', (d: any) => (selectedSignalId && !tracedSignalIds.has(d.id)) ? 0.02 : d.opacity)
       .attr('filter', (d: any) => d.isUrgent ? 'url(#glow)' : 'none');
 
-    // Setup Active Agent IDs for subtle indicators
+    // Draw Nodes
     const activeSourceAgentIds = new Set(signals.map(s => s.source));
     const activeTargetAgentIds = new Set(signals.map(s => s.target));
 
-    // 3. Draw Agents (Nodes)
-    const node = g.append('g')
-      .selectAll('g')
-      .data(agents)
-      .enter()
-      .append('g')
-      .attr('cursor', 'pointer')
+    const nodeSelection = nodeLayer.selectAll<SVGGElement, any>('g.agent-group')
+      .data(physicsNodes, d => d.id)
+      .join(
+        enter => {
+          const gGroup = enter.append('g')
+            .attr('class', 'agent-group')
+            .attr('cursor', 'pointer')
+            .call(d3.drag<any, any>()
+              .on('start', dragstarted)
+              .on('drag', dragged)
+              .on('end', dragended)
+            );
+          
+          gGroup.append('circle').attr('class', 'radius-indicator');
+          gGroup.append('circle').attr('class', 'ripple-indicator');
+          gGroup.append('circle').attr('class', 'main-body');
+          gGroup.append('text').attr('class', 'label-text')
+            .attr('font-size', '10px')
+            .attr('dx', 18)
+            .attr('dy', 4)
+            .attr('fill', '#064e3b')
+            .attr('font-weight', 'bold');
+
+          return gGroup;
+        },
+        update => update,
+        exit => exit.remove()
+      )
       .on('click', (event, d: any) => {
         event.stopPropagation();
         setSelectedAgentId(d.id);
         setSelectedSignalId(null);
-      })
-      .call(d3.drag<any, any>()
-        .on('start', dragstarted)
-        .on('drag', dragged)
-        .on('end', dragended));
+      });
 
-    // Interaction Radius Indicator
-    node.append('circle')
+    // Update internal elements of nodes seamlessly
+    nodeSelection.select('.radius-indicator')
       .attr('r', (d: any) => d.interactionRadius || 100)
-      .attr('fill', (d: any) => d.health < 30 ? '#f43f5e' : '#10b981')
-      .attr('fill-opacity', 0.03)
-      .attr('stroke', (d: any) => d.health < 30 ? '#f43f5e' : '#10b981')
-      .attr('stroke-opacity', 0.1)
-      .attr('stroke-dasharray', '2,2');
+      .attr('fill', (d: any) => d.id === selectedAgentId ? '#fbbf24' : (d.health < 30 ? '#f43f5e' : '#10b981'))
+      .attr('fill-opacity', (d: any) => d.id === selectedAgentId ? 0.1 : 0.03)
+      .attr('stroke', (d: any) => d.id === selectedAgentId ? '#fbbf24' : (d.health < 30 ? '#f43f5e' : '#10b981'))
+      .attr('stroke-opacity', (d: any) => d.id === selectedAgentId ? 0.6 : 0.1)
+      .attr('stroke-dasharray', '2,2')
+      .style('filter', (d: any) => d.id === selectedAgentId ? 'url(#glow)' : 'none');
 
-    // Subtle Signal Pulse Indicator (New)
-    node.append('circle')
-      .attr('r', (d: any) => 16 + (d.energy / 10))
+    nodeSelection.select('.ripple-indicator')
       .attr('fill', 'transparent')
       .attr('stroke', (d: any) => {
-        if (activeSourceAgentIds.has(d.id)) return '#34d399'; // Outgoing
-        if (activeTargetAgentIds.has(d.id)) return '#60a5fa'; // Incoming
+        if (activeSourceAgentIds.has(d.id)) return '#34d399';
+        if (activeTargetAgentIds.has(d.id)) return '#60a5fa';
         return 'transparent';
       })
       .attr('stroke-width', (d: any) => (activeSourceAgentIds.has(d.id) || activeTargetAgentIds.has(d.id)) ? 2 : 0)
-      .attr('stroke-dasharray', (d: any) => activeSourceAgentIds.has(d.id) ? '2,1' : 'none')
-      .attr('class', (d: any) => (activeSourceAgentIds.has(d.id) || activeTargetAgentIds.has(d.id)) ? 'animate-pulse' : '')
       .style('filter', 'url(#glow)');
 
-    // Main Agent Body
-    node.append('circle')
-      .attr('r', (d: any) => 12 + (d.energy / 10))
+    nodeSelection.select('.main-body')
+      .attr('r', (d: any) => {
+        const baseSize = 12 + (d.energy / 10);
+        return d.id === selectedAgentId ? baseSize * 1.5 : baseSize;
+      })
       .attr('fill', (d: any) => {
-        if (selectedSignalId && !tracedAgentIds.has(d.id)) return '#1e293b'; // Muted
-        if (d.type === OrganType.METABOLIC_HUB) return '#059669'; // Emerald-600
-        if (d.type === OrganType.SIGNAL_TRANSDUCER) return '#10b981'; // Emerald-500
-        if (d.type === OrganType.RESOURCE_COLLECTOR) return '#34d399'; // Emerald-400
-        if (d.type === OrganType.STRUCTURAL_ANCHOR) return '#064e3b'; // Emerald-900
-        if (d.type === OrganType.IMMUNE_SENTINEL) return '#dc2626'; // Red-600
+        if (selectedSignalId && !tracedAgentIds.has(d.id)) return '#1e293b';
+        if (d.type === OrganType.METABOLIC_HUB) return '#059669';
+        if (d.type === OrganType.SIGNAL_TRANSDUCER) return '#10b981';
+        if (d.type === OrganType.RESOURCE_COLLECTOR) return '#34d399';
+        if (d.type === OrganType.STRUCTURAL_ANCHOR) return '#064e3b';
+        if (d.type === OrganType.IMMUNE_SENTINEL) return '#dc2626';
         return '#065f46';
       })
       .attr('stroke', (d: any) => {
         if (d.id === selectedAgentId) return '#fbbf24';
         return tracedAgentIds.has(d.id) ? '#fbbf24' : '#ecfdf5';
       })
-      .attr('stroke-width', (d: any) => {
-        if (d.id === selectedAgentId) return 4;
-        return tracedAgentIds.has(d.id) ? 4 : 2;
-      })
-      .attr('class', 'drop-shadow-lg');
+      .attr('stroke-width', (d: any) => (d.id === selectedAgentId || tracedAgentIds.has(d.id)) ? 4 : 2)
+      .attr('class', 'drop-shadow-lg main-body')
+      .style('filter', (d: any) => d.id === selectedAgentId ? 'url(#glow)' : 'none');
 
-    node.append('text')
-      .text((d: any) => d.name.split('-')[0])
-      .attr('font-size', '10px')
-      .attr('dx', 18)
-      .attr('dy', 4)
-      .attr('fill', '#064e3b')
-      .attr('font-weight', 'bold');
+    nodeSelection.select('.label-text')
+      .text((d: any) => d.name.split('-')[0]);
 
-    // 4. Update Loop
-    simulation.on('tick', () => {
-      const time = performance.now() / 1500; // Animation speed control
+    // Attach simulation tick handler ONCE, overriding older ones
+    simulation.on('tick.render', () => {
+      const now = performance.now();
+      const time = now / 1500;
+      const rippleT = (now % 1200) / 1200;
 
-      link
-        .attr('x1', (d: any) => (d.source as any).x)
-        .attr('y1', (d: any) => (d.source as any).y)
-        .attr('x2', (d: any) => (d.target as any).x)
-        .attr('y2', (d: any) => (d.target as any).y);
-
-      particle
-        .attr('cx', (d: any) => {
-          const source = d.source as any;
-          const target = d.target as any;
-          const t = (time - d.offset + 1) % 1;
-          return source.x + (target.x - source.x) * t;
-        })
-        .attr('cy', (d: any) => {
-          const source = d.source as any;
-          const target = d.target as any;
-          const t = (time - d.offset + 1) % 1;
-          return source.y + (target.y - source.y) * t;
+      linkSelection
+        .attr('x1', (d: any) => d.source.x || 0)
+        .attr('y1', (d: any) => d.source.y || 0)
+        .attr('x2', (d: any) => d.target.x || 0)
+        .attr('y2', (d: any) => d.target.y || 0)
+        .attr('stroke-opacity', (d: any) => {
+          const base = d.isUrgent ? 0.8 : 0.5;
+          const fade = Math.max(0, 1 - (d.age / 40));
+          return base * fade;
         });
 
-      node.attr('transform', (d: any) => `translate(${d.x},${d.y})`);
+      particleSelection
+        .attr('cx', (d: any) => {
+          if (!d.source.x || !d.target.x) return 0;
+          const t = (time - d.offset + 1) % 1;
+          return d.source.x + (d.target.x - d.source.x) * t;
+        })
+        .attr('cy', (d: any) => {
+          if (!d.source.y || !d.target.y) return 0;
+          const t = (time - d.offset + 1) % 1;
+          return d.source.y + (d.target.y - d.source.y) * t;
+        })
+        .attr('fill-opacity', (d: any) => {
+          const fade = Math.max(0, 1 - (d.age / 40));
+          return d.opacity * fade;
+        });
+
+      nodeSelection.select('.ripple-indicator')
+        .attr('r', (d: any) => {
+          if (activeSourceAgentIds.has(d.id) || activeTargetAgentIds.has(d.id)) {
+            const baseSize = 12 + (d.energy / 10);
+            const size = d.id === selectedAgentId ? baseSize * 1.5 : baseSize;
+            return size + (rippleT * 20);
+          }
+          return 0;
+        })
+        .attr('stroke-opacity', (d: any) => {
+          if (activeSourceAgentIds.has(d.id) || activeTargetAgentIds.has(d.id)) {
+            return Math.max(0, 1 - (rippleT * 1.5));
+          }
+          return 0;
+        });
+
+      nodeSelection.attr('transform', (d: any) => `translate(${d.x || 0},${d.y || 0})`);
     });
 
     function dragstarted(event: any) {
-      if (!event.active) simulation.alphaTarget(0.3).restart();
+      if (!event.active) simulation.alphaTarget(0.1).restart();
       event.subject.fx = event.subject.x;
       event.subject.fy = event.subject.y;
     }
@@ -296,10 +398,8 @@ const Visualizer: React.FC<VisualizerProps> = ({ agents, signals, width, height 
       event.subject.fy = null;
     }
 
-    return () => {
-      simulation.stop();
-    };
-  }, [agents, signals, width, height, selectedSignalId, selectedAgentId, tracedSignalIds, tracedAgentIds]);
+  }, [agents, signals, selectedSignalId, selectedAgentId, tracedSignalIds, tracedAgentIds]);
+
 
   return (
     <div className="relative w-full h-full bg-emerald-950 rounded-2xl overflow-hidden border border-emerald-800 shadow-2xl" onClick={() => { setSelectedSignalId(null); setSelectedAgentId(null); }}>

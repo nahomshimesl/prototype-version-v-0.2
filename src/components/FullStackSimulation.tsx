@@ -31,13 +31,31 @@ const FullStackSimulation: React.FC = () => {
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === 'organoid2026') {
-      setIsLoggedIn(true);
-      setLoginError('');
-    } else {
-      setLoginError('Invalid access key.');
+    setIsLoggingIn(true);
+    setLoginError('');
+    
+    try {
+      const response = await fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${password}`
+        }
+      });
+      
+      if (response.ok) {
+        setIsLoggedIn(true);
+      } else {
+        const errorData = await response.json().catch(() => null);
+        setLoginError(errorData?.error || 'Invalid access key.');
+      }
+    } catch (error) {
+      setLoginError('Connection failed.');
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -54,7 +72,10 @@ const FullStackSimulation: React.FC = () => {
         body: JSON.stringify({ glucose, oxygen, aminoAcids, temperature })
       });
       
-      if (!response.ok) throw new Error('Simulation failed');
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Simulation failed: ${response.status} ${text}`);
+      }
       const data = await response.json();
       setResult(data);
       
@@ -121,10 +142,11 @@ const FullStackSimulation: React.FC = () => {
             </div>
             <button 
               type="submit"
-              className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+              disabled={isLoggingIn}
+              className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50"
             >
               <LogIn size={18} />
-              Initialize Session
+              {isLoggingIn ? 'Verifying...' : 'Initialize Session'}
             </button>
           </form>
           <p className="text-[10px] text-emerald-700 mt-6 text-center uppercase tracking-widest">Default Key: organoid2026</p>

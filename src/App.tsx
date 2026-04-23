@@ -107,6 +107,7 @@ export default function App() {
     workerRef.current = new Worker(new URL('./engine/simulation.worker.ts', import.meta.url), { type: 'module' });
     
     workerRef.current.onmessage = (e) => {
+      const { nextAgents, nextSignals, nextStep } = e.data;
       const now = Date.now();
       
       setAgents(nextAgents);
