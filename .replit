@@ -63,6 +63,6 @@ localPort = 24678
 externalPort = 3000
 
 [deployment]
-deploymentTarget = "vm"
+deploymentTarget = "gce"
 run = ["npm", "run", "start"]
 build = ["npm", "run", "build"]
