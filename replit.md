@@ -52,3 +52,20 @@ To enable AI root-cause analysis, set `GEMINI_API_KEY` in environment. Without i
 - Server port changed from 3000 → 5000 (with `PORT` env override).
 - Triggered workspace re-sync to resolve deploy-side stale snapshot.
 
+
+## Per-agent micro-policies (additive — Apr 2026)
+Each `AgentState` now carries a `policy` field of type `AgentPolicy`:
+- `REACTIVE` — original default behavior (unchanged math)
+- `COOPERATIVE` — emits emergency alerts at slightly lower energy threshold
+- `ECONOMIST` — hoards energy, suppresses alerts when energy < 25
+- `EXPLORER` — interaction radius × 1.2
+- `DEFENDER` — emits emergency alerts at higher health threshold (40 vs 30)
+
+Default policy is assigned per organ type in `pickPolicyForType()` in `src/engine/SimulationLoop.ts` (e.g., `IMMUNE_SENTINEL` → mostly `DEFENDER`). Policy is preserved across rebirth (re-rolled for the new organ type) and added to `handleAddAgent` in `App.tsx`. `AGENT_POLICY_INFO` in `src/types/simulation.ts` carries the human-readable label/description for UI use.
+
+## Local collapse forecaster (additive — Apr 2026)
+Continuous, deterministic, in-browser early-warning system that complements the on-demand Gemini AI analysis.
+- **Service**: `src/services/CollapseForecaster.ts` — pure function `forecastCollapse(metrics, currentStep)`. Uses three established critical-slowing-down indicators: trend slope, variance, and lag-1 autocorrelation. Returns `CollapseForecast { collapseRisk 0-100, etaSteps, trendSlope, variance, autocorrelation, warnings[] }`.
+- **Panel**: `src/components/CollapseForecast.tsx` — renders risk %, ETA, slope, indicators, and human-readable warnings; color-codes by severity.
+- **Wiring**: a single `useEffect` in `App.tsx` re-runs the forecaster whenever `metrics.step` advances. Panel renders inside the HEALTH tab (above the existing `HealthDashboard`).
+- No new dependencies, no API calls — runs in pure JS every tick.

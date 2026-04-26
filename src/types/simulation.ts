@@ -11,6 +11,21 @@ export enum OrganType {
   IMMUNE_SENTINEL = 'Immune Sentinel',
 }
 
+export type AgentPolicy =
+  | 'REACTIVE'
+  | 'COOPERATIVE'
+  | 'ECONOMIST'
+  | 'EXPLORER'
+  | 'DEFENDER';
+
+export const AGENT_POLICY_INFO: Record<AgentPolicy, { label: string; description: string }> = {
+  REACTIVE: { label: 'Reactive', description: 'Default behavior — responds proportionally to incoming signals.' },
+  COOPERATIVE: { label: 'Cooperative', description: 'Slightly amplifies emergency alerts to broadcast to more neighbors.' },
+  ECONOMIST: { label: 'Economist', description: 'Hoards energy — suppresses costly emergency alerts when energy is low.' },
+  EXPLORER: { label: 'Explorer', description: 'Extends interaction radius by ~20% to discover distant neighbors.' },
+  DEFENDER: { label: 'Defender', description: 'Triggers emergency alerts earlier (at higher health threshold).' },
+};
+
 export type GeneType = 'METABOLISM' | 'SIGNALING' | 'STABILITY' | 'GROWTH' | 'DEFENSE' | 'PATTERN_SCALING' | 'RECURSION_DEPTH' | 'ADAPTATION_SPEED' | 'RECOVERY_AGGRESSION' | 'STABILITY_THRESHOLD';
 
 export interface Gene {
@@ -103,6 +118,7 @@ export interface AgentState {
   id: string;
   name: string;
   type: OrganType;
+  policy: AgentPolicy; // Per-agent local decision strategy ("micro-policy")
   health: number; // 0-100
   energy: number; // ATP levels
   sensitivity: number; // Response to signals
@@ -154,6 +170,16 @@ export interface PredictionResult {
   recommendation: string;
   phiHarmony: number;
   timestamp: number;
+}
+
+export interface CollapseForecast {
+  step: number;
+  collapseRisk: number;        // 0-100
+  etaSteps: number | null;     // estimated steps until critical (mean health < 30)
+  trendSlope: number;          // health units per step
+  variance: number;            // critical-slowing-down indicator
+  autocorrelation: number;     // lag-1 autocorrelation
+  warnings: string[];
 }
 
 export interface MutationSuggestion {

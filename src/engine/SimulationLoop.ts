@@ -3,7 +3,39 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { AgentState, OrganType, BioSignal, ManagerDNA, GeneType, SignalPriority } from '../types/simulation';
+import { AgentState, OrganType, BioSignal, ManagerDNA, GeneType, SignalPriority, AgentPolicy } from '../types/simulation';
+
+// Default per-agent decision policy ("micro-policy"), assigned by organ type.
+// Each agent still gets some random variation so populations are heterogeneous.
+function pickPolicyForType(type: OrganType): AgentPolicy {
+  const r = Math.random();
+  switch (type) {
+    case OrganType.METABOLIC_HUB:       return r < 0.7 ? 'ECONOMIST'   : 'REACTIVE';
+    case OrganType.IMMUNE_SENTINEL:     return r < 0.7 ? 'DEFENDER'    : 'COOPERATIVE';
+    case OrganType.SIGNAL_TRANSDUCER:   return r < 0.7 ? 'COOPERATIVE' : 'REACTIVE';
+    case OrganType.RESOURCE_COLLECTOR:  return r < 0.7 ? 'EXPLORER'    : 'REACTIVE';
+    case OrganType.STRUCTURAL_ANCHOR:   return r < 0.8 ? 'REACTIVE'    : 'DEFENDER';
+    default:                            return 'REACTIVE';
+  }
+}
+
+// Per-policy modifier for the dynamic interaction radius.
+function policyRadiusMultiplier(policy: AgentPolicy): number {
+  return policy === 'EXPLORER' ? 1.2 : 1.0;
+}
+
+// Per-policy decision: should this agent emit an emergency ALERT this step?
+// Reactive uses the original threshold (health<30, energy>10). Other policies tweak it.
+function shouldEmitEmergencyAlert(policy: AgentPolicy, health: number, energy: number): boolean {
+  switch (policy) {
+    case 'ECONOMIST':  return health < 30 && energy > 25; // hoards energy
+    case 'DEFENDER':   return health < 40 && energy > 10; // earlier alert
+    case 'COOPERATIVE':return health < 30 && energy > 8;  // alerts even with little energy
+    case 'EXPLORER':
+    case 'REACTIVE':
+    default:           return health < 30 && energy > 10;
+  }
+}
 
 // Mock UniProt-style data for initialization
 const BIO_DATA_POOL = [
@@ -109,6 +141,7 @@ export function createInitialAgents(count: number): AgentState[] {
       id: `agent-${i}`,
       name: `${bioTemplate.name}-${i}`,
       type: bioTemplate.type,
+      policy: pickPolicyForType(bioTemplate.type),
       health: 80 + Math.random() * 20,
       energy: 50 + Math.random() * 50,
       sensitivity: 0.1 + Math.random() * 0.9,
@@ -221,7 +254,11 @@ export function processSimulationStep(
     // Urgent states expand the radius
     const isEmergency = health < 30;
     const baseRadius = 100 * agent.parameters.phiScaling;
-    const nextInteractionRadius = baseRadius * (1 + (signalingMod * 0.5)) * (isEmergency ? 2.0 : 1.0);
+    const nextInteractionRadius =
+      baseRadius
+      * (1 + (signalingMod * 0.5))
+      * (isEmergency ? 2.0 : 1.0)
+      * policyRadiusMultiplier(agent.policy); // micro-policy modifier (Explorer = 1.2x)
 
     // 3. Agent Logic (Recursive & Phi-based)
     // Update Phi Phase for spiral movement/behavior
@@ -304,6 +341,7 @@ export function processSimulationStep(
         ...agent,
         name: `${bioTemplate.name}-Reborn-${Date.now().toString().slice(-4)}`,
         type: bioTemplate.type,
+        policy: pickPolicyForType(bioTemplate.type), // reroll micro-policy for the new organ type
         health: 100,
         energy: 100,
         sensitivity: 0.1 + Math.random() * 0.9,
@@ -319,8 +357,8 @@ export function processSimulationStep(
       };
     }
 
-    // 5. Emergency Signaling (New Mechanism)
-    if (health < 30 && energy > 10) {
+    // 5. Emergency Signaling — gated by per-agent micro-policy
+    if (shouldEmitEmergencyAlert(agent.policy, health, energy)) {
       // Alerts have double the interaction radius
       const alertRadius = nextInteractionRadius * 2;
       const neighbors = (agent.x !== undefined && agent.y !== undefined)

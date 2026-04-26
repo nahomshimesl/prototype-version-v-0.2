@@ -5,7 +5,9 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { io } from "socket.io-client";
-import { AgentState, BioSignal, OrganType, SimulationMetrics, PredictionResult, MutationSuggestion, ManagerDNA, SystemHealthState, SignalPriority, TelemetryEvent } from './types/simulation';
+import { AgentState, BioSignal, OrganType, SimulationMetrics, PredictionResult, MutationSuggestion, ManagerDNA, SystemHealthState, SignalPriority, TelemetryEvent, CollapseForecast } from './types/simulation';
+import { forecastCollapse } from './services/CollapseForecaster';
+import CollapseForecastPanel from './components/CollapseForecast';
 import { createInitialAgents, processSimulationStep, createInitialDNA } from './engine/SimulationLoop';
 import { getSimulationPrediction, suggestMutation } from './services/PredictionService';
 import { healthEngine } from './services/HealthEngine';
@@ -60,6 +62,12 @@ export default function App() {
     anomalies: [],
   });
   const [prediction, setPrediction] = useState<PredictionResult>();
+  const [forecast, setForecast] = useState<CollapseForecast | null>(null);
+  // Recompute the local collapse forecast every tick (fast, deterministic, no API calls).
+  useEffect(() => {
+    setForecast(forecastCollapse(metrics, metrics.step));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metrics.step, metrics.history.length, metrics.entropy]);
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cooldown, setCooldown] = useState(0);
@@ -382,6 +390,7 @@ export default function App() {
       id: `agent-${Date.now()}`,
       name: `New-${type.split(' ')[0]}-${agents.length}`,
       type,
+      policy: 'REACTIVE', // user-added agents start with the default micro-policy
       health: 100,
       energy: 100,
       sensitivity: 0.5,
@@ -1451,7 +1460,10 @@ export default function App() {
                 exit={{ opacity: 0, scale: 1.05 }}
                 className="h-full overflow-hidden"
               >
-                <HealthDashboard health={health} onResolveIncident={handleResolveIncident} />
+                <div className="h-full overflow-y-auto space-y-4 pr-2">
+                  <CollapseForecastPanel forecast={forecast} />
+                  <HealthDashboard health={health} onResolveIncident={handleResolveIncident} />
+                </div>
               </motion.div>
             ) : activeTab === 'ANALYSIS' ? (
               <motion.div

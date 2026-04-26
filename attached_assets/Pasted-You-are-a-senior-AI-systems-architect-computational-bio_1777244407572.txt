@@ -1,0 +1,78 @@
+You are a senior AI systems architect, computational biologist, and distributed systems engineer.
+
+Design and generate a complete architecture and implementation plan for a high-end research-grade simulation platform with the following properties:
+
+CORE CONCEPT:
+- The system simulates a biological ecosystem composed of modular "organs".
+- Each organ is represented by an autonomous micro-LLM agent (lightweight language model or decision engine).
+- Instead of DNA, behavior emerges from communication and state exchange between these agents.
+
+SYSTEM REQUIREMENTS:
+
+1. AGENT (ORGAN) SYSTEM:
+- Minimum of 50 active agents, scalable to 100+.
+- Each agent must have:
+  - Internal state (memory, parameters, health, energy, etc.)
+  - A local decision model (small LLM or rule-based + ML hybrid)
+  - Input/output channels to communicate with other agents
+- Agents must "talk" to each other using structured messages (not raw text only).
+
+2. EMERGENT BEHAVIOR:
+- The system should produce emergent patterns from agent interaction.
+- Encourage formation of complex patterns (e.g., self-organization, feedback loops, oscillations, fractal-like structures such as golden-ratio-inspired distributions).
+- Include mechanisms for adaptation, mutation, or learning over time.
+
+3. BIOLOGICAL DATA INTEGRATION:
+- Connect to real biological databases (e.g., protein, gene, or metabolic datasets).
+- Use this data to:
+  - Initialize agent parameters
+  - Influence interactions
+  - Validate simulation outputs
+
+4. SIMULATION ENGINE:
+- Time-stepped or event-driven simulation loop
+- Support for:
+  - Adding/removing agents dynamically at runtime
+  - Modifying agent parameters live
+- Must handle high interaction complexity efficiently
+
+5. PREDICTION MODULE:
+- Build a behavioral prediction system that:
+  - Learns from simulation history
+  - Predicts future states of the ecosystem
+  - Detects instability or collapse scenarios
+- Use ML techniques (e.g., sequence models, graph neural networks, or time-series forecasting)
+
+6. VISUALIZATION & USER INTERFACE:
+- Real-time visualization of:
+  - Agent states
+  - Network interactions
+  - Emergent structures
+- Allow user to:
+  - Add/remove organs (agents)
+  - Modify system parameters
+  - Observe predictions and alerts
+
+7. COMMUNICATION MODEL:
+- Define a protocol for inter-agent communication:
+  - Message types
+  - State-sharing formats
+  - Priority or signaling mechanisms
+
+8. SCALABILITY & PERFORMANCE:
+- Use parallel processing or distributed systems design
+- Optimize for large-scale simulations
+
+OUTPUT FORMAT:
+- System architecture diagram (textual if needed)
+- Tech stack recommendations
+- Module-by-module breakdown
+- Example pseudocode for:
+  - Agent behavior loop
+  - Simulation loop
+  - Communication system
+- Suggestions for training or implementing micro-LLMs
+- Roadmap for building MVP → advanced research tool
+
+IMPORTANT:
+Focus on realism, modularity, and research usability. Avoid vague descriptions. This system should be something a graduate-level researcher or lab could realistically begin implementing.
