@@ -18,7 +18,7 @@ React + Vite frontend with an Express + Socket.IO backend (single server).
 - Replit deployment target: `gce` (Socket.IO needs persistent server). When Replit's deploy pipeline misbehaves, fall back to Render via `render.yaml` (or any host that reads `Procfile`). See `DEPLOY.md` for the 5-step Render walkthrough.
 
 ## Auth
-- API endpoints gated by `APP_PASSWORD` env (defaults to `organoid2026`).
+- API endpoints gated by `APP_PASSWORD` env. In dev (no `NODE_ENV`) it falls back to `organoid2026` so local work needs no setup. In production (`NODE_ENV=production`) the server refuses to boot if `APP_PASSWORD` is unset — see `DEPLOY.md`.
 
 ## Stability Sentinel (reliability subsystem)
 

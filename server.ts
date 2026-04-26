@@ -18,6 +18,14 @@ async function startServer() {
   app.use(express.json({ limit: "256kb" }));
 
   // Simple Password Protection Middleware
+  // In production, refuse to boot without APP_PASSWORD set — the fallback below
+  // is in public source and would leave operator endpoints effectively open.
+  if (process.env.NODE_ENV === "production" && !process.env.APP_PASSWORD) {
+    console.error(
+      "FATAL: APP_PASSWORD must be set in production. Set it to a long random string in your host's environment variables. See DEPLOY.md for details.",
+    );
+    process.exit(1);
+  }
   const APP_PASSWORD = process.env.APP_PASSWORD || "organoid2026";
   const OPERATOR_ROOM = "operators";
 

@@ -14,7 +14,7 @@ If Replit's deploy pipeline is misbehaving (the recurring `ENOENT: .replit` erro
    - **Build:** `npm install && npm run build`
    - **Start:** `npm run start`
    - **Plan:** Free
-3. **Environment Variables** — both vars are optional for the app to run, but read the security note below before deciding. The recommended setup for any public URL is to set `APP_PASSWORD` to a long random string here and leave `GEMINI_API_KEY` unset.
+3. **Environment Variables** — `APP_PASSWORD` is **required** in production (the server refuses to boot without it). Set it to a long random string here. `GEMINI_API_KEY` is optional and can be left unset. See the table below for details.
 4. Click **Create Web Service**.
 5. Wait ~3–5 min for the first build. Render shows a live `https://boss-organoid.onrender.com`-style URL when it's ready.
 
@@ -22,14 +22,14 @@ That's it. Every subsequent `git push origin main` triggers an automatic redeplo
 
 ## Environment variables
 
-**Both variables below are optional** — the app boots and runs end-to-end without setting either one. Setting them is about security posture and feature toggles, not basic functionality.
+`APP_PASSWORD` is **required** in production (`NODE_ENV=production`); the server aborts boot with a one-line error if it's missing. `GEMINI_API_KEY` is optional.
 
 | Variable | What it does | If unset |
 |---|---|---|
-| `APP_PASSWORD` | Sets the operator-mode access key for the diagnostic dashboard, system logs endpoints, and Sentinel mutation endpoints. | Falls back to the built-in default `organoid2026`. App works fully — but see security note. |
+| `APP_PASSWORD` | Sets the operator-mode access key for the diagnostic dashboard, system logs endpoints, and Sentinel mutation endpoints. | **Production:** server refuses to start. **Dev (`npm run dev`):** falls back to the built-in default `organoid2026` so local work needs no setup. |
 | `GEMINI_API_KEY` | Enables AI-powered root-cause analysis in the Stability Sentinel. | The Sentinel uses its built-in heuristic analyzer instead. Every other feature works the same. Safe to leave unset. |
 
-> ⚠️ **Security note for public deploys:** the `APP_PASSWORD` fallback (`organoid2026`) is in the public source code. On a public URL like `*.onrender.com`, anyone who finds the repo can become an operator. **Strongly recommended:** set `APP_PASSWORD` to a fresh random value when deploying anywhere reachable from the internet. For local-only or password-shared private demos, leaving it unset is fine.
+> ⚠️ **Why this is enforced:** the dev fallback (`organoid2026`) is in the public source code. On a public URL like `*.onrender.com`, anyone who finds the repo could become an operator. The server now refuses to boot in production unless `APP_PASSWORD` is set to a fresh value — set it to a long random string in your host's environment tab.
 
 To set them on Render: dashboard → your service → **Environment** tab → **Add Environment Variable**.
 
