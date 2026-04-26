@@ -17,6 +17,19 @@ async function startServer() {
 
   app.use(express.json({ limit: "256kb" }));
 
+  // Simple Password Protection Middleware
+  const APP_PASSWORD = process.env.APP_PASSWORD || "organoid2026";
+  const OPERATOR_ROOM = "operators";
+
+  const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const authHeader = req.headers.authorization;
+    if (authHeader === `Bearer ${APP_PASSWORD}`) {
+      next();
+    } else {
+      res.status(401).json({ error: "Unauthorized. Please provide the correct access key." });
+    }
+  };
+
   // ───────────── Stability Sentinel ─────────────
   const sentinelAi = process.env.GEMINI_API_KEY
     ? {
@@ -31,33 +44,73 @@ async function startServer() {
         },
       }
     : null;
-  const sentinel = new Sentinel({ io, ai: sentinelAi });
+  const sentinel = new Sentinel({ io, ai: sentinelAi, operatorRoom: OPERATOR_ROOM });
 
-  // Socket.io for Real-time Communication
+  // Socket.io authentication. Connections without the operator token are still
+  // accepted (so anonymous clients can be served the SPA via the same server),
+  // but only authenticated sockets are added to the OPERATOR_ROOM where
+  // sensitive diagnostic events are broadcast.
+  io.use((socket, next) => {
+    const token = (socket.handshake.auth as any)?.token
+      || (socket.handshake.headers as any)?.["x-access-key"];
+    socket.data.isOperator = token === APP_PASSWORD;
+    next();
+  });
+
   io.on("connection", (socket) => {
-    console.log("Client connected:", socket.id);
+    if (socket.data.isOperator) {
+      socket.join(OPERATOR_ROOM);
+      console.log("Operator connected:", socket.id);
+    } else {
+      console.log("Anonymous client connected:", socket.id);
+    }
 
     socket.on("join-session", (sessionId) => {
+      // Session rooms are user-scoped collaboration rooms. Reject obviously
+      // bogus values to prevent room-namespace abuse, and never let a client
+      // join the operator room via this channel.
+      if (typeof sessionId !== "string" || sessionId.length === 0 || sessionId.length > 128 || sessionId === OPERATOR_ROOM) return;
       socket.join(sessionId);
-      console.log(`Client ${socket.id} joined session ${sessionId}`);
     });
 
     socket.on("disconnect", () => {
-      console.log("Client disconnected:", socket.id);
+      // quiet — disconnect log was operator-noisy
     });
   });
 
-  // Simple Password Protection Middleware
-  const APP_PASSWORD = process.env.APP_PASSWORD || "organoid2026";
-
-  const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader === `Bearer ${APP_PASSWORD}`) {
-      next();
-    } else {
-      res.status(401).json({ error: "Unauthorized. Please provide the correct access key." });
+  // ───────────── Per-IP rate limiting (in-memory sliding window) ─────────────
+  // Used to throttle the deliberately-unauthenticated /api/sentinel/report
+  // endpoint so anonymous callers cannot flood the incident store or evict
+  // legitimate incidents from operator visibility.
+  const reportRateBuckets = new Map<string, number[]>();
+  const REPORT_RATE_WINDOW_MS = 60_000;
+  const REPORT_RATE_MAX = 30; // 30 reports / minute / IP
+  const rateLimitReport = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = (req.ip || req.socket.remoteAddress || "unknown").toString();
+    const now = Date.now();
+    const cutoff = now - REPORT_RATE_WINDOW_MS;
+    const arr = (reportRateBuckets.get(ip) || []).filter((t) => t >= cutoff);
+    if (arr.length >= REPORT_RATE_MAX) {
+      res.setHeader("Retry-After", "60");
+      return res.status(429).json({ ok: false, error: "Too many reports. Slow down." });
     }
+    arr.push(now);
+    reportRateBuckets.set(ip, arr);
+    // Periodic cleanup of stale IPs
+    if (reportRateBuckets.size > 5000) {
+      for (const [k, v] of reportRateBuckets) {
+        if (v.length === 0 || v[v.length - 1] < cutoff) reportRateBuckets.delete(k);
+      }
+    }
+    next();
   };
+
+  const sanitizeStr = (v: unknown, max: number): string | undefined => {
+    if (v == null) return undefined;
+    const s = String(v);
+    return s.length > max ? s.slice(0, max) : s;
+  };
+  const ALLOWED_SEVERITY = new Set(["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
 
   // Biological Simulation Endpoint
   app.post("/api/auth/verify", authMiddleware, (req, res) => {
@@ -93,17 +146,17 @@ async function startServer() {
   let systemLogs: any[] = [];
   let systemHealth: any = { score: 100, status: "OK", lastUpdate: new Date().toISOString() };
 
-  app.get("/api/system/health", (req, res) => {
+  app.get("/api/system/health", authMiddleware, (req, res) => {
     res.json(systemHealth);
   });
 
   app.post("/api/system/health", authMiddleware, (req, res) => {
     systemHealth = { ...req.body, lastUpdate: new Date().toISOString() };
-    io.emit('health-update', systemHealth);
+    io.to(OPERATOR_ROOM).emit('health-update', systemHealth);
     res.json({ status: "updated" });
   });
 
-  app.get("/api/system/logs", (req, res) => {
+  app.get("/api/system/logs", authMiddleware, (req, res) => {
     res.json(systemLogs.slice(-100));
   });
 
@@ -111,24 +164,49 @@ async function startServer() {
     const log = { ...req.body, serverTimestamp: new Date().toISOString() };
     systemLogs.push(log);
     if (systemLogs.length > 500) systemLogs.shift();
-    io.emit('log-added', log);
+    io.to(OPERATOR_ROOM).emit('log-added', log);
     res.json({ status: "logged" });
   });
 
   // ───────────── Sentinel API ─────────────
   // Reporting is intentionally unauthenticated so client errors during auth
-  // failures still get captured. Mutating endpoints require auth.
+  // failures still get captured, but it is rate-limited per IP, strictly
+  // validated, and the resulting incidents are flagged as `untrusted` so they
+  // get a separate eviction budget and cannot push trusted incidents out of
+  // the operator-visible store. All read/mutate endpoints require auth.
 
-  app.post("/api/sentinel/report", (req, res) => {
+  app.post("/api/sentinel/report", rateLimitReport, (req, res) => {
     try {
+      const body = req.body ?? {};
+      // Hard size/type validation. Anything beyond these caps is silently truncated.
+      const sevRaw = sanitizeStr(body.severity, 16);
+      const severity = sevRaw && ALLOWED_SEVERITY.has(sevRaw) ? (sevRaw as any) : "MEDIUM";
+
+      // Bound context to a small JSON payload to prevent storage bloat.
+      let safeContext: Record<string, unknown> | undefined = undefined;
+      if (body.context && typeof body.context === "object") {
+        try {
+          const json = JSON.stringify(body.context);
+          if (json.length <= 4000) safeContext = body.context;
+          else safeContext = { _truncated: true, preview: json.slice(0, 1500) };
+        } catch {
+          safeContext = undefined;
+        }
+      }
+
+      // Whether to treat the caller as trusted (operator) or anonymous.
+      const trusted = req.headers.authorization === `Bearer ${APP_PASSWORD}`;
+
       const inc = sentinel.report({
-        source: String(req.body?.source ?? "browser"),
-        kind: req.body?.kind,
-        message: String(req.body?.message ?? "Unknown error"),
-        stack: req.body?.stack,
-        severity: req.body?.severity,
-        context: req.body?.context,
-        timestamp: req.body?.timestamp,
+        source: sanitizeStr(body.source, 64) ?? (trusted ? "browser" : "untrusted-browser"),
+        kind: sanitizeStr(body.kind, 64),
+        message: sanitizeStr(body.message, 1000) ?? "Unknown error",
+        stack: sanitizeStr(body.stack, 8000),
+        severity,
+        context: safeContext,
+        // Server time only — never trust client clocks for incident bookkeeping.
+        timestamp: Date.now(),
+        trusted,
       });
       res.json({ ok: true, id: inc.id, fingerprint: inc.fingerprint, occurrences: inc.occurrences });
     } catch (e: any) {
@@ -136,15 +214,15 @@ async function startServer() {
     }
   });
 
-  app.get("/api/sentinel/incidents", (_req, res) => res.json(sentinel.list()));
-  app.get("/api/sentinel/incidents/:id", (req, res) => {
+  app.get("/api/sentinel/incidents", authMiddleware, (_req, res) => res.json(sentinel.list()));
+  app.get("/api/sentinel/incidents/:id", authMiddleware, (req, res) => {
     const inc = sentinel.get(req.params.id);
     if (!inc) return res.status(404).json({ error: "Not found" });
     res.json(inc);
   });
-  app.get("/api/sentinel/anomalies", (_req, res) => res.json(sentinel.listAnomalies()));
-  app.get("/api/sentinel/stats", (_req, res) => res.json(sentinel.stats()));
-  app.get("/api/sentinel/recovery-actions", (_req, res) => res.json(sentinel.listRecoveryActions()));
+  app.get("/api/sentinel/anomalies", authMiddleware, (_req, res) => res.json(sentinel.listAnomalies()));
+  app.get("/api/sentinel/stats", authMiddleware, (_req, res) => res.json(sentinel.stats()));
+  app.get("/api/sentinel/recovery-actions", authMiddleware, (_req, res) => res.json(sentinel.listRecoveryActions()));
 
   app.post("/api/sentinel/incidents/:id/analyze", authMiddleware, async (req, res) => {
     const analysis = await sentinel.analyze(req.params.id, Boolean(req.body?.force));

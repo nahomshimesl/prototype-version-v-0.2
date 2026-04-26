@@ -38,6 +38,17 @@ export interface RawErrorReport {
   severity?: Severity;
   context?: DiagnosticContext;
   timestamp?: number;
+  /**
+   * Trust flag.
+   *  - `true`: server-internal report or one accompanied by a valid operator
+   *    token. Counts toward the trusted incident budget. Can raise
+   *    RECURRING_ERROR anomalies and use any severity (including CRITICAL).
+   *  - `false` (default): anonymous public reports from /api/sentinel/report.
+   *    Severity is capped at HIGH, RECURRING_ERROR escalation is suppressed,
+   *    and the incident is held in a smaller untrusted bucket so flooding
+   *    cannot evict trusted incidents from operator visibility.
+   */
+  trusted?: boolean;
 }
 
 export interface FixSuggestion {
@@ -71,6 +82,14 @@ export interface Incident {
   contexts: DiagnosticContext[];   // bounded ring of recent contexts
   analysis?: RootCauseAnalysis;
   recoveryHistory: { action: string; at: number; ok: boolean; note?: string }[];
+  /**
+   * Whether this incident originated from a trusted (server-side or
+   * authenticated-operator) source. Untrusted incidents are isolated into
+   * their own eviction bucket so anonymous reports cannot push trusted
+   * incidents out of the store. Defaults to `true` for backward compat with
+   * incidents loaded from older persisted stores.
+   */
+  trusted: boolean;
 }
 
 export interface Anomaly {
@@ -95,6 +114,12 @@ interface SentinelOptions {
   storePath?: string;
   maxIncidents?: number;
   maxContextsPerIncident?: number;
+  /**
+   * Maximum incident slots reserved for untrusted (anonymous) reports. Held
+   * in a separate eviction bucket so flooding cannot evict trusted incidents.
+   * Defaults to ~20% of maxIncidents.
+   */
+  maxUntrustedIncidents?: number;
   errorRateWindowMs?: number;
   errorRateThreshold?: number;     // errors per minute
   memorySpikeRatio?: number;       // RSS growth ratio over baseline
@@ -102,6 +127,12 @@ interface SentinelOptions {
   recurrenceThreshold?: number;
   io?: IOServer;
   ai?: { generate: (prompt: string) => Promise<string> } | null;
+  /**
+   * Socket.IO room that receives sensitive sentinel:* broadcasts. When set,
+   * `emit()` only delivers to sockets in this room (i.e. authenticated
+   * operators) instead of every connected socket.
+   */
+  operatorRoom?: string | null;
 }
 
 export class Sentinel {
@@ -110,18 +141,21 @@ export class Sentinel {
   private recoveryActions = new Map<string, RecoveryAction>();
   private errorTimestamps: number[] = [];
   private rssBaseline = 0;
-  private opts: Required<Omit<SentinelOptions, "io" | "ai">> & {
+  private opts: Required<Omit<SentinelOptions, "io" | "ai" | "operatorRoom">> & {
     io: IOServer | null;
     ai: SentinelOptions["ai"];
+    operatorRoom: string | null;
   };
   private monitorTimer: NodeJS.Timeout | null = null;
   private saveTimer: NodeJS.Timeout | null = null;
   private analysisInflight = new Map<string, Promise<RootCauseAnalysis>>();
 
   constructor(opts: SentinelOptions = {}) {
+    const maxIncidents = opts.maxIncidents ?? 500;
     this.opts = {
       storePath: opts.storePath ?? path.join(process.cwd(), ".local", "sentinel-store.json"),
-      maxIncidents: opts.maxIncidents ?? 500,
+      maxIncidents,
+      maxUntrustedIncidents: opts.maxUntrustedIncidents ?? Math.max(20, Math.floor(maxIncidents * 0.2)),
       maxContextsPerIncident: opts.maxContextsPerIncident ?? 10,
       errorRateWindowMs: opts.errorRateWindowMs ?? 60_000,
       errorRateThreshold: opts.errorRateThreshold ?? 20,
@@ -130,6 +164,7 @@ export class Sentinel {
       recurrenceThreshold: opts.recurrenceThreshold ?? 5,
       io: opts.io ?? null,
       ai: opts.ai ?? null,
+      operatorRoom: opts.operatorRoom ?? null,
     };
     this.load();
     this.registerDefaultRecoveryActions();
@@ -140,10 +175,23 @@ export class Sentinel {
   // ───────────────────────────── Reporting ─────────────────────────────
 
   report(raw: RawErrorReport): Incident {
-    const ts = raw.timestamp ?? Date.now();
-    const fingerprint = this.fingerprint(raw);
-    const id = this.incidents.get(fingerprint)?.id ?? `inc_${crypto.randomBytes(5).toString("hex")}`;
+    // Trust gate: untrusted (anonymous public) reports never use the
+    // caller-supplied timestamp, are capped at HIGH severity, and are kept
+    // separate from operator/server-originated incidents in storage.
+    const trusted = raw.trusted !== false; // default true for back-compat
+    const ts = trusted ? (raw.timestamp ?? Date.now()) : Date.now();
+
+    const cappedSeverityIncoming: Severity | undefined = trusted
+      ? raw.severity
+      : raw.severity === "CRITICAL" ? "HIGH" : raw.severity;
+
+    // Fingerprint untrusted reports into a separate keyspace so an attacker
+    // cannot fingerprint-collide with a known trusted incident and inject
+    // misleading occurrences/contexts into it.
+    const fpSeed = this.fingerprint(raw);
+    const fingerprint = trusted ? fpSeed : `u:${fpSeed}`;
     const existing = this.incidents.get(fingerprint);
+    const id = existing?.id ?? `inc_${crypto.randomBytes(5).toString("hex")}`;
 
     const incident: Incident = existing ?? {
       id,
@@ -152,18 +200,19 @@ export class Sentinel {
       kind: raw.kind ?? this.inferKind(raw.message, raw.stack),
       message: raw.message,
       stack: raw.stack,
-      severity: raw.severity ?? "MEDIUM",
+      severity: cappedSeverityIncoming ?? "MEDIUM",
       status: "OPEN",
       firstSeen: ts,
       lastSeen: ts,
       occurrences: 0,
       contexts: [],
       recoveryHistory: [],
+      trusted,
     };
 
     incident.lastSeen = ts;
     incident.occurrences += 1;
-    incident.severity = this.escalateSeverity(incident.severity, raw.severity);
+    incident.severity = this.escalateSeverity(incident.severity, cappedSeverityIncoming);
     if (raw.context) {
       incident.contexts.unshift({ ...raw.context, _t: ts });
       if (incident.contexts.length > this.opts.maxContextsPerIncident) incident.contexts.length = this.opts.maxContextsPerIncident;
@@ -172,9 +221,13 @@ export class Sentinel {
 
     this.incidents.set(fingerprint, incident);
     this.evictIfNeeded();
-    this.errorTimestamps.push(ts);
+    // Only count trusted incidents toward the operator-visible error rate, so
+    // an anonymous flood cannot trigger ERROR_RATE_HIGH for the operators.
+    if (trusted) this.errorTimestamps.push(ts);
     this.emit("sentinel:incident", this.publicIncident(incident));
-    if (incident.occurrences >= this.opts.recurrenceThreshold) {
+    // RECURRING_ERROR escalation is reserved for trusted incidents — anonymous
+    // callers cannot use it to manufacture HIGH-severity anomalies.
+    if (trusted && incident.occurrences >= this.opts.recurrenceThreshold) {
       this.raiseAnomaly({
         type: "RECURRING_ERROR",
         severity: "HIGH",
@@ -474,10 +527,10 @@ ${stack}
 
   private attachProcessHandlers() {
     process.on("uncaughtException", (err) => {
-      this.report({ source: "server", kind: err.name || "UncaughtException", message: err.message, stack: err.stack, severity: "CRITICAL" });
+      this.report({ source: "server", kind: err.name || "UncaughtException", message: err.message, stack: err.stack, severity: "CRITICAL", trusted: true });
     });
     process.on("unhandledRejection", (reason: any) => {
-      this.report({ source: "server", kind: reason?.name || "UnhandledRejection", message: String(reason?.message ?? reason), stack: reason?.stack, severity: "HIGH" });
+      this.report({ source: "server", kind: reason?.name || "UnhandledRejection", message: String(reason?.message ?? reason), stack: reason?.stack, severity: "HIGH", trusted: true });
     });
   }
 
@@ -507,14 +560,38 @@ ${stack}
   }
 
   private emit(event: string, payload: unknown) {
-    try { this.opts.io?.emit(event, payload); } catch { /* socket optional */ }
+    try {
+      const io = this.opts.io;
+      if (!io) return;
+      // Sensitive sentinel telemetry is only sent to authenticated operator
+      // sockets when an operator room is configured. Unauthenticated
+      // listeners therefore never receive incident contents, anomalies,
+      // analyses, or recovery hints over the websocket.
+      if (this.opts.operatorRoom) io.to(this.opts.operatorRoom).emit(event, payload);
+      else io.emit(event, payload);
+    } catch { /* socket optional */ }
   }
 
   private evictIfNeeded() {
-    if (this.incidents.size <= this.opts.maxIncidents) return;
-    const sorted = Array.from(this.incidents.entries()).sort((a, b) => a[1].lastSeen - b[1].lastSeen);
-    const drop = sorted.slice(0, this.incidents.size - this.opts.maxIncidents);
-    for (const [k] of drop) this.incidents.delete(k);
+    // Two-bucket eviction. Trusted and untrusted incidents have independent
+    // budgets so an anonymous flood cannot push real operator incidents out
+    // of the store. We sort each bucket by lastSeen ASC and drop the oldest
+    // overflow from each side.
+    const trusted: Incident[] = [];
+    const untrusted: Incident[] = [];
+    for (const inc of this.incidents.values()) {
+      (inc.trusted === false ? untrusted : trusted).push(inc);
+    }
+    const dropOldest = (bucket: Incident[], cap: number) => {
+      if (bucket.length <= cap) return;
+      bucket.sort((a, b) => a.lastSeen - b.lastSeen);
+      const overflow = bucket.length - cap;
+      for (let i = 0; i < overflow; i++) this.incidents.delete(bucket[i].fingerprint);
+    };
+    // Trusted bucket: keep maxIncidents - maxUntrustedIncidents reserved capacity.
+    const trustedCap = Math.max(1, this.opts.maxIncidents - this.opts.maxUntrustedIncidents);
+    dropOldest(trusted, trustedCap);
+    dropOldest(untrusted, this.opts.maxUntrustedIncidents);
   }
 
   // ───────────────────────────── Persistence ─────────────────────────────
@@ -546,7 +623,12 @@ ${stack}
       const raw = fs.readFileSync(this.opts.storePath, "utf8");
       const data = JSON.parse(raw);
       if (Array.isArray(data?.incidents)) {
-        for (const inc of data.incidents) this.incidents.set(inc.fingerprint, inc);
+        for (const inc of data.incidents) {
+          // Backfill `trusted` for incidents persisted before the trust split
+          // existed. Anything from before is treated as trusted (operator).
+          if (typeof inc.trusted !== "boolean") inc.trusted = true;
+          this.incidents.set(inc.fingerprint, inc);
+        }
       }
     } catch (e) {
       console.warn("[sentinel] load failed:", (e as Error).message);
