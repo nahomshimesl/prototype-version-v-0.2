@@ -67,3 +67,7 @@ deploymentTarget = "gce"
 run = ["npm", "run", "start"]
 build = ["npm", "run", "build"]
 ignorePorts = true
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000
