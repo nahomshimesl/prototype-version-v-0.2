@@ -129,4 +129,9 @@ Current focus:
 To build a system where:
 
 > Life is no longer simulated…
-> it **emerges** from intelligence itself.
+> it **emerges** from intelligence itself. 
+it took me 67$ to build this my own biological novel based app 
+> I hope you truly grasp this further explanation of the idea and the deeper erudition behind the novel and my upcoming method, Foretell Reverse Evolutionary Genetic Study, where I deliberately challenge conventional evolutionary thinking by applying a backward reverse-engineering approach to what we merely circumspectly observe. Rather than accepting observed genetic outcomes at face value, this method questions them—dissecting them in reverse to expose the hidden pathways evolution has taken, and perhaps unsettling what we assume we already understand.
+>
+> contact me : nahomdskjn@gmail.com
+> 
