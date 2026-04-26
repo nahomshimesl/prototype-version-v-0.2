@@ -41,50 +41,44 @@ interface FirestoreErrorInfo {
   error: string;
   operationType: OperationType;
   path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
+  /**
+   * Whether a user was signed in at the time of the failure. We deliberately
+   * do NOT include uid, email, tenantId, or any provider profile fields
+   * (display name, email, photo URL) here. Firestore failures used to bubble
+   * those up via a thrown Error → unhandledrejection → /api/sentinel/report
+   * and /api/system/logs (which is also fed to Gemini for diagnosis), turning
+   * a routine database error into a PII leak across the diagnostic pipeline.
+   * Diagnosis only needs to know that the failing call was authenticated.
+   */
+  authenticated: boolean;
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errMsg = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
+    error: errMsg,
     operationType,
-    path
-  }
+    path,
+    authenticated: !!auth.currentUser?.uid,
+  };
+  // Local console diagnostics: identity-free. Avoids leaking PII into any
+  // browser extension or capture mechanism that scrapes console output.
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  
-  // Report to Health Engine
+
+  // Report to Health Engine. The details object intentionally carries only
+  // the (already access-controlled) document path and an opaque "auth" flag
+  // — never email, UID, tenant, or provider data.
   healthEngine.reportExternalError(
     `Firestore:${operationType}`,
-    errInfo.error,
+    errMsg,
     'MEDIUM',
-    { path: errInfo.path, auth: !!errInfo.authInfo.userId }
+    { path, auth: errInfo.authenticated }
   );
 
+  // The thrown Error propagates into window.onerror / unhandledrejection
+  // handlers in SentinelClient and HealthEngine, which forward the message
+  // to backend telemetry. The serialized payload here must therefore stay
+  // strictly identity-free.
   throw new Error(JSON.stringify(errInfo));
 }
 
