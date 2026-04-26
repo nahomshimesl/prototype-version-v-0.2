@@ -33,7 +33,21 @@ A self-diagnosing reliability layer separate from the simulation-domain HealthEn
 
 To enable AI root-cause analysis, set `GEMINI_API_KEY` in environment. Without it, the Sentinel runs heuristic-only diagnoses.
 
+## About tab (`src/components/AboutPanel.tsx`)
+- New default landing tab explaining what BOSS does, with the AI failure-prediction loop as the headline.
+- Sections: hero, feature cards, 4-step prediction workflow with concrete edit→outcome examples, inline SVG architecture diagram, module guide (jump-to-tab buttons), quick-start, citation.
+- Exports `ActiveTab` union type, used by `App.tsx` for `useState<ActiveTab>` and the `onJump` callback (no `as any`).
+- App.tsx adds (a) ResizeObserver on simulation container and (b) a `useEffect([activeTab])` that re-measures at 60ms and 250ms when entering SIMULATION, so the visualizer fills the container correctly when switched to from another tab.
+
+## Boot screen (`src/components/SystemBoot.tsx` + `src/main.tsx`)
+- Industrial / university-research-lab aesthetic: slate/amber, serif + mono, Provenance/Reproducibility/Citation panels, kernel init log with addr/module/event/ms/stat columns, est. remaining countdown.
+- 26-step boot, total ~120 s. Long scientific steps (data load bytes, regression suite 512 cases, Lancaster calibration RMSE, JIT iterations, KD-tree, SHA-256) tick visibly.
+- Authored as: *Project lead: Nahom Berhanu · Rockville High School*; same as citation author.
+- StrictMode-safe (timers + intervals tracked in refs, all cleared in `cancelAll`).
+- `?skipBoot=1` URL param OR `sessionStorage.boss_booted === '1'` skips the boot. The flag is set automatically on first completion so refreshes within the same session don't replay it.
+
 ## Recent fixes
+- Cleaned 5 pre-existing TS errors (StabilitySentinel React.ReactNode → ReactNode; Visualizer spread types).
 - Removed duplicate `TelemetryEvent` import in `src/App.tsx`.
 - Server port changed from 3000 → 5000 (with `PORT` env override).
 - Triggered workspace re-sync to resolve deploy-side stale snapshot.

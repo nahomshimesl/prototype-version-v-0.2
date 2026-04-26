@@ -225,10 +225,10 @@ const Visualizer: React.FC<VisualizerProps> = ({ agents, signals, width, height 
       });
 
     // Draw Particles
-    const particleData = linksData.flatMap(d => [
-      { ...d, offset: 0, size: 1, opacity: 0.8 },
-      { ...d, offset: 0.05, size: 0.7, opacity: 0.4 },
-      { ...d, offset: 0.1, size: 0.4, opacity: 0.2 }
+    const particleData = linksData.flatMap((d: any) => [
+      { ...(d as object), offset: 0, size: 1, opacity: 0.8 },
+      { ...(d as object), offset: 0.05, size: 0.7, opacity: 0.4 },
+      { ...(d as object), offset: 0.1, size: 0.4, opacity: 0.2 }
     ]);
 
     const particleSelection = particleLayer.selectAll<SVGCircleElement, any>('circle')

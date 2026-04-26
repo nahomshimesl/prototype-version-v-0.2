@@ -17,7 +17,7 @@ import FullStackSimulation from './components/FullStackSimulation';
 import SystemInspector from './components/SystemInspector';
 import ErrorBoundary from './components/ErrorBoundary';
 import { motion, AnimatePresence } from 'motion/react';
-import { Microscope, Database, BrainCircuit, Network, Zap, Activity, ShieldAlert, Save, Trash2, LogIn, LogOut, Dna, Check, X, AlertTriangle, ArrowUpDown, Search, FlaskConical, Terminal, Binary, Brain } from 'lucide-react';
+import { Microscope, Database, BrainCircuit, Network, Zap, Activity, ShieldAlert, Save, Trash2, LogIn, LogOut, Dna, Check, X, AlertTriangle, ArrowUpDown, Search, FlaskConical, Terminal, Binary, Brain, BookOpen } from 'lucide-react';
 import { auth, db, googleProvider, signInWithPopup, signOut, collection, addDoc, deleteDoc, doc, onSnapshot, query, where, orderBy, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, AreaChart, Area } from 'recharts';
@@ -25,6 +25,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import TelemetryViewer from './components/TelemetryViewer';
 import DataAnalyzer from './components/DataAnalyzer';
 import StabilitySentinel from './components/StabilitySentinel';
+import AboutPanel, { type ActiveTab } from './components/AboutPanel';
 import { SentinelClient } from './services/SentinelClient';
 
 export default function App() {
@@ -36,7 +37,7 @@ export default function App() {
   const [agents, setAgents] = useState<AgentState[]>([]);
   const [signals, setSignals] = useState<BioSignal[]>([]);
   const [isRunning, setIsRunning] = useState(false);
-  const [activeTab, setActiveTab] = useState<'SIMULATION' | 'GENETICS' | 'HEALTH' | 'POPULATION' | 'FULLSTACK' | 'TELEMETRY' | 'ANALYSIS' | 'SENTINEL'>('SIMULATION');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('ABOUT');
   const [telemetryEvents, setTelemetryEvents] = useState<TelemetryEvent[]>([]);
   const [dna, setDna] = useState<ManagerDNA>(createInitialDNA());
   const [health, setHealth] = useState<SystemHealthState>({
@@ -235,14 +236,40 @@ export default function App() {
     // Initial size with a small delay to ensure layout is ready
     const timer = setTimeout(updateSize, 100);
     window.addEventListener('resize', updateSize);
+
+    // Observe the simulation container so we re-measure whenever it
+    // becomes visible (e.g. user switches to SIMULATION from ABOUT).
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+      ro = new ResizeObserver(updateSize);
+      ro.observe(containerRef.current);
+    }
     return () => {
       socketRef.current?.disconnect();
       clearTimeout(timer);
       window.removeEventListener('resize', updateSize);
+      ro?.disconnect();
       unsubscribeAuth();
       if (workerRef.current) workerRef.current.terminate();
     };
   }, []);
+
+  // Re-measure when entering SIMULATION (containerRef may have been
+  // unmounted while another tab was active).
+  useEffect(() => {
+    if (activeTab !== 'SIMULATION') return;
+    const measure = () => {
+      if (containerRef.current) {
+        const { clientWidth, clientHeight } = containerRef.current;
+        if (clientWidth > 0 && clientHeight > 0) {
+          setViewSize({ width: clientWidth, height: clientHeight });
+        }
+      }
+    };
+    const t1 = setTimeout(measure, 60);
+    const t2 = setTimeout(measure, 250);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [activeTab]);
 
   // 2. Fetch Research Logs
   useEffect(() => {
@@ -651,6 +678,17 @@ export default function App() {
           <Microscope className="text-white" size={24} />
         </div>
         <nav className="flex flex-col gap-6">
+          <button
+            onClick={() => setActiveTab('ABOUT')}
+            className={`p-3 rounded-xl transition-all ${
+              activeTab === 'ABOUT'
+                ? 'bg-emerald-800 text-amber-300 shadow-inner'
+                : 'text-emerald-500 hover:text-emerald-300'
+            }`}
+            title="About this software"
+          >
+            <BookOpen size={20} />
+          </button>
           <button 
             onClick={() => setActiveTab('SIMULATION')}
             className={`p-3 rounded-xl transition-all ${
@@ -751,6 +789,16 @@ export default function App() {
           </div>
           <div className="flex gap-4 items-center">
             <nav className="flex items-center bg-emerald-800/50 p-1 rounded-xl mr-4">
+              <button
+                onClick={() => setActiveTab('ABOUT')}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  activeTab === 'ABOUT'
+                    ? 'bg-amber-400 text-emerald-950 shadow-sm'
+                    : 'text-emerald-400 hover:text-emerald-200'
+                }`}
+              >
+                <BookOpen size={14} /> About
+              </button>
               <button
                 onClick={() => setActiveTab('SIMULATION')}
                 className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
@@ -1416,6 +1464,16 @@ export default function App() {
                 className="h-full overflow-y-auto p-4"
               >
                 <StabilitySentinel />
+              </motion.div>
+            ) : activeTab === 'ABOUT' ? (
+              <motion.div
+                key="about"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -12 }}
+                className="h-full overflow-hidden"
+              >
+                <AboutPanel onJump={setActiveTab} />
               </motion.div>
             ) : null}
           </AnimatePresence>

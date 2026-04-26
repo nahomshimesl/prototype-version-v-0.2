@@ -2,7 +2,7 @@
  * Stability Sentinel — developer dashboard.
  */
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, type ReactNode } from "react";
 import { ShieldAlert, Activity, Brain, Wrench, RefreshCw, CheckCircle2, AlertTriangle, Cpu, Clock, ChevronRight, Zap } from "lucide-react";
 import { SentinelClient } from "../services/SentinelClient";
 
@@ -344,7 +344,7 @@ export default function StabilitySentinel() {
   );
 }
 
-function Stat({ icon, label, value, tone = "ok" }: { icon: React.ReactNode; label: string; value: React.ReactNode; tone?: "ok" | "warn" }) {
+function Stat({ icon, label, value, tone = "ok" }: { icon: ReactNode; label: string; value: ReactNode; tone?: "ok" | "warn" }) {
   return (
     <div className={`rounded-xl border p-2.5 ${tone === "warn" ? "border-amber-500/30 bg-amber-500/5" : "border-emerald-800 bg-emerald-900/30"}`}>
       <div className="text-[10px] uppercase tracking-widest text-emerald-500 flex items-center gap-1">{icon} {label}</div>
