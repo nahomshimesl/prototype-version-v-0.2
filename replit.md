@@ -15,7 +15,7 @@ React + Vite frontend with an Express + Socket.IO backend (single server).
 ## Build / Deploy
 - Build: `npm run build` (vite build + esbuild bundles `server.ts` to `dist/server.cjs`)
 - Start: `npm run start` (`node dist/server.cjs`)
-- Deployment target: `vm` (Socket.IO needs persistent server).
+- Replit deployment target: `gce` (Socket.IO needs persistent server). When Replit's deploy pipeline misbehaves, fall back to Render via `render.yaml` (or any host that reads `Procfile`). See `DEPLOY.md` for the 5-step Render walkthrough.
 
 ## Auth
 - API endpoints gated by `APP_PASSWORD` env (defaults to `organoid2026`).
