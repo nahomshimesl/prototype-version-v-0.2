@@ -18,3 +18,12 @@
 ::-webkit-scrollbar-thumb {
   @apply bg-emerald-800 rounded-full hover:bg-emerald-700 transition-colors;
 }
+
+/* Hide scrollbars on horizontally-scrolling toolbars (used by the header nav on mobile) */
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE/Edge */
+  scrollbar-width: none;    /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;            /* Chrome/Safari */
+}

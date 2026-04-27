@@ -699,8 +699,8 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div className="flex h-screen bg-emerald-950 text-emerald-50 font-sans overflow-hidden">
-      {/* Sidebar Navigation */}
-      <div className="w-20 bg-emerald-900 flex flex-col items-center py-8 gap-8 border-r border-emerald-800">
+      {/* Sidebar Navigation — hidden on phones; the top nav is the entry point on small screens */}
+      <div className="hidden md:flex w-20 bg-emerald-900 flex-col items-center py-8 gap-8 border-r border-emerald-800">
         <div className="w-12 h-12 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/20">
           <Microscope className="text-white" size={24} />
         </div>
@@ -808,14 +808,20 @@ export default function App() {
       </div>
 
       {/* Main Simulation Area */}
-      <main className="flex-1 flex flex-col relative">
-        <header className="h-20 border-b border-emerald-800 bg-emerald-900/50 backdrop-blur-md flex items-center justify-between px-8">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-emerald-50">Bio-Organoid Simulation System</h1>
-            <p className="text-xs font-medium text-emerald-500 uppercase tracking-widest">Research Environment v1.0.4</p>
+      <main className="flex-1 flex flex-col relative min-w-0">
+        <header className="md:h-20 border-b border-emerald-800 bg-emerald-900/50 backdrop-blur-md flex flex-col md:flex-row md:items-center md:justify-between px-4 md:px-8 py-3 md:py-0 gap-3 md:gap-0">
+          <div className="flex items-center gap-3 md:gap-0 md:block">
+            {/* Logo shown on mobile (sidebar is hidden) */}
+            <div className="md:hidden w-10 h-10 bg-emerald-500 rounded-xl flex items-center justify-center shrink-0">
+              <Microscope className="text-white" size={20} />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-lg md:text-2xl font-bold tracking-tight text-emerald-50 truncate">Bio-Organoid Simulation System</h1>
+              <p className="text-[10px] md:text-xs font-medium text-emerald-500 uppercase tracking-widest">Research Environment v1.0.4</p>
+            </div>
           </div>
-          <div className="flex gap-4 items-center">
-            <nav className="flex items-center bg-emerald-800/50 p-1 rounded-xl mr-4">
+          <div className="flex gap-2 md:gap-4 items-center w-full md:w-auto overflow-x-auto no-scrollbar">
+            <nav className="flex items-center bg-emerald-800/50 p-1 rounded-xl md:mr-4 shrink-0">
               <button
                 onClick={() => setActiveTab('ABOUT')}
                 className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
@@ -868,8 +874,8 @@ export default function App() {
               </button>
             </nav>
             {user ? (
-              <div className="flex items-center gap-4">
-                <div className="flex flex-col items-end">
+              <div className="flex items-center gap-2 md:gap-4 shrink-0">
+                <div className="hidden lg:flex flex-col items-end">
                   <span className="text-[10px] font-bold text-emerald-400 uppercase">Researcher</span>
                   <span className="text-sm font-bold text-emerald-50">{user.displayName}</span>
                 </div>
@@ -911,8 +917,8 @@ export default function App() {
                 )}
               </div>
             )}
-            <div className="h-8 w-px bg-emerald-800 mx-2" />
-            <div className="flex flex-col items-end">
+            <div className="hidden lg:block h-8 w-px bg-emerald-800 mx-2" />
+            <div className="hidden lg:flex flex-col items-end shrink-0">
               <span className="text-[10px] font-bold text-emerald-400 uppercase">System Entropy</span>
               <span className="text-sm font-mono font-bold text-emerald-400">LOW STABILITY</span>
             </div>
@@ -927,9 +933,9 @@ export default function App() {
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 20 }}
-                className="h-full p-8 overflow-y-auto flex flex-col gap-6"
+                className="h-full p-4 md:p-8 overflow-y-auto flex flex-col gap-4 md:gap-6"
               >
-                <div className="min-h-[450px] h-[50vh] flex-1 relative bg-emerald-950 rounded-3xl border border-emerald-800 overflow-hidden shadow-2xl" ref={containerRef}>
+                <div className="min-h-[320px] md:min-h-[450px] h-[50vh] flex-1 relative bg-emerald-950 rounded-3xl border border-emerald-800 overflow-hidden shadow-2xl" ref={containerRef}>
             {viewSize.width > 0 && viewSize.height > 0 ? (
               <Visualizer 
                 agents={filteredAgentsForVisualizer} 
@@ -1142,7 +1148,7 @@ export default function App() {
           </AnimatePresence>
 
           {/* Bottom Stats Bar */}
-          <div className="grid grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-6">
             <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
               <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600">
                 <Network size={20} />

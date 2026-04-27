@@ -312,11 +312,11 @@ export default function SystemBoot({ onComplete }: SystemBootProps) {
             }}
           />
 
-          <div className="relative h-full w-full flex flex-col px-10 pt-8 pb-6 max-w-[1280px] mx-auto">
+          <div className="relative h-full w-full flex flex-col px-4 md:px-10 pt-4 md:pt-8 pb-4 md:pb-6 max-w-[1280px] mx-auto overflow-y-auto">
 
             {/* Top bar — institutional masthead */}
-            <header className="flex items-start justify-between border-b border-slate-700/60 pb-4">
-              <div className="flex items-start gap-4">
+            <header className="flex flex-col md:flex-row md:items-start md:justify-between border-b border-slate-700/60 pb-4 gap-3">
+              <div className="flex items-start gap-3 md:gap-4 min-w-0">
                 <Crest />
                 <div>
                   <div
@@ -356,7 +356,7 @@ export default function SystemBoot({ onComplete }: SystemBootProps) {
                 </div>
               </div>
 
-              <div className="text-right text-[11px] font-mono text-slate-400 leading-relaxed">
+              <div className="text-left md:text-right text-[11px] font-mono text-slate-400 leading-relaxed shrink-0">
                 <div>UTC {utc}</div>
                 <div>uptime  T+{elapsed}s</div>
                 <div>est. remaining  {remainingStr}</div>
@@ -364,11 +364,11 @@ export default function SystemBoot({ onComplete }: SystemBootProps) {
               </div>
             </header>
 
-            {/* Main content — two columns */}
-            <div className="flex-1 grid grid-cols-12 gap-6 mt-6 min-h-0">
+            {/* Main content — two columns on desktop, stacked on phone */}
+            <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-6 mt-4 md:mt-6 md:min-h-0">
 
               {/* Left: meta panels */}
-              <aside className="col-span-4 flex flex-col gap-4 text-[11px] min-h-0">
+              <aside className="md:col-span-4 flex flex-col gap-4 text-[11px] md:min-h-0">
                 <Panel title="Provenance">
                   <Row k="License" v="Apache-2.0" />
                   <Row k="Repository" v="git@research/boss.git" />
@@ -406,7 +406,7 @@ export default function SystemBoot({ onComplete }: SystemBootProps) {
               </aside>
 
               {/* Right: kernel init log */}
-              <section className="col-span-8 flex flex-col min-h-0">
+              <section className="md:col-span-8 flex flex-col md:min-h-0 min-h-[400px]">
                 <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.25em] text-slate-400 mb-2 font-mono">
                   <span>kernel initialization</span>
                   <span className="flex items-center gap-2">
