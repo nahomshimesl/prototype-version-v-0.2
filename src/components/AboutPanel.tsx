@@ -11,6 +11,7 @@ export type ActiveTab =
   | 'ANALYSIS'
   | 'SENTINEL'
   | 'HISTORY'
+  | 'ADMIN'
   | 'ABOUT';
 import {
   Microscope,

@@ -70,6 +70,22 @@ service cloud.firestore {
     // Rules
     // ===============================================================
 
+    // Operator allow-list. Mutated only by the server via the Admin SDK
+    // (which bypasses these rules). All client access is denied — owners
+    // interact with this collection through the in-app Admin tab, which
+    // hits the server-side `/api/admin/operators` endpoints. This prevents
+    // any client (even an authenticated operator) from escalating their
+    // own privileges by writing to the collection directly.
+    match /operatorAllowList/{email} {
+      allow read, write: if false;
+    }
+
+    // Operator-allow-list audit trail. Same model — server-only writes
+    // via Admin SDK, no client access.
+    match /operatorAccessAudit/{entryId} {
+      allow read, write: if false;
+    }
+
     match /researchLogs/{logId} {
       // Users can only see their own logs
       allow read: if isDocOwner();

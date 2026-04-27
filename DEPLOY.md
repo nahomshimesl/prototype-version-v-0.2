@@ -48,8 +48,16 @@ Operators sign in to the protected endpoints with **their own Google account** v
 
 ### Adding / removing an operator
 
-- **Add:** append the email to `OPERATOR_EMAILS` in the host's environment tab and redeploy. The new operator just needs to sign in with that Google account.
-- **Remove:** delete the email from `OPERATOR_EMAILS` and redeploy. The next request from that user will get a 401 — no password rotation needed, no other operators are affected.
+Two paths:
+
+1. **Env var (`OPERATOR_EMAILS`)** — durable, requires a redeploy:
+   - **Add:** append the email to `OPERATOR_EMAILS` in the host's environment tab and redeploy. The new operator just needs to sign in with that Google account.
+   - **Remove:** delete the email from `OPERATOR_EMAILS` and redeploy. The next request from that user will get a 401 — no password rotation needed, no other operators are affected.
+2. **In-app Admin tab (no redeploy)** — for owners only:
+   - Set `OWNER_EMAILS=alice@example.com,bob@example.com` (comma-separated). Owners are implicitly operators **and** see an extra **Admin** tab in the sidebar.
+   - From the Admin tab, owners can add or remove operator emails on the fly. Changes propagate within ~30s on this server, and within ~30s on every other server replica that uses the same persistent store.
+   - **Persistence:** the dynamic allow-list lives in **Firestore** when `FIREBASE_SERVICE_ACCOUNT` is set (recommended for any multi-replica deploy). Otherwise it falls back to a local JSON file inside the server (`.local/operator-allow-list.json`) — fine for single-instance deploys (default Render web service / Replit GCE), but on horizontally scaled hosts each replica would keep its own private list. The server prints a loud `[allowlist] WARNING` at boot if you enable the Admin tab in production without Firestore.
+   - **Owner status is env-only by design.** The Admin tab cannot create new owners — that would be an escalation path. To rotate owners, edit `OWNER_EMAILS` and redeploy. Make sure you don't remove your own address before saving — there is no in-app recovery once you lose owner status.
 
 ### Audit trail
 

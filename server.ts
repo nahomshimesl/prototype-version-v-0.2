@@ -9,6 +9,7 @@ import { initializeApp, cert, getApps, type App as AdminApp } from "firebase-adm
 import { getAuth as getAdminAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { Sentinel } from "./services/sentinel.js";
 import * as db from "./services/db.js";
+import { createAllowList } from "./services/operatorAllowList.js";
 
 dotenv.config();
 
@@ -61,6 +62,11 @@ function parseList(envVal: string | undefined, lower: boolean): Set<string> {
 }
 const OPERATOR_EMAILS = parseList(process.env.OPERATOR_EMAILS, true);
 const OPERATOR_UIDS = parseList(process.env.OPERATOR_UIDS, false);
+// Owner allow-list. Owners are always operators AND can manage the dynamic
+// operator allow-list at runtime via the Admin tab. Owner status is sourced
+// strictly from this env var (not Firestore) so an owner cannot be silently
+// removed by a compromised client / DB write.
+const OWNER_EMAILS = parseList(process.env.OWNER_EMAILS, true);
 
 // Optional break-glass shared password. This intentionally has no default
 // fallback: if the env var is unset, the break-glass path is fully closed.
@@ -79,9 +85,14 @@ async function startServer() {
   // In production refuse to boot without a usable operator allow-list. The
   // previous APP_PASSWORD-only mode left a single shared secret with no
   // identity or audit trail; we now require explicit per-user accounts.
-  if (process.env.NODE_ENV === "production" && OPERATOR_EMAILS.size === 0 && OPERATOR_UIDS.size === 0) {
+  if (
+    process.env.NODE_ENV === "production" &&
+    OPERATOR_EMAILS.size === 0 &&
+    OPERATOR_UIDS.size === 0 &&
+    OWNER_EMAILS.size === 0
+  ) {
     console.error(
-      "FATAL: OPERATOR_EMAILS (or OPERATOR_UIDS) must be set in production. " +
+      "FATAL: OPERATOR_EMAILS, OPERATOR_UIDS, or OWNER_EMAILS must be set in production. " +
         "Comma-separated list of Firebase Auth identities allowed to access operator endpoints. See DEPLOY.md.",
     );
     process.exit(1);
@@ -89,13 +100,51 @@ async function startServer() {
 
   const OPERATOR_ROOM = "operators";
 
-  function isAllowedOperator(decoded: DecodedIdToken): boolean {
+  // Persistent (Firestore-backed if a service account is configured, otherwise
+  // local-JSON) dynamic operator allow-list. Owners can add/remove entries at
+  // runtime via the Admin tab without redeploying. A short in-memory cache
+  // keeps the auth hot path synchronous.
+  const allowList = createAllowList(adminApp);
+  // Warm the cache at boot so the first auth check after restart isn't blind.
+  allowList
+    .list(true)
+    .then((entries) =>
+      console.log(
+        `[allowlist] loaded ${entries.length} dynamic operator email(s) from persistent store`,
+      ),
+    )
+    .catch((e) => console.warn("[allowlist] initial load failed:", e?.message));
+
+  async function isAllowedOperator(decoded: DecodedIdToken): Promise<boolean> {
     if (OPERATOR_UIDS.has(decoded.uid)) return true;
     const email = (decoded.email || "").toLowerCase();
     if (!email) return false;
     if (!decoded.email_verified) return false;
-    return OPERATOR_EMAILS.has(email);
+    if (OPERATOR_EMAILS.has(email)) return true;
+    if (OWNER_EMAILS.has(email)) return true; // owners are implicitly operators
+    // Cache-backed lookup: refreshes from Firestore / file when the 30s TTL
+    // expires, so changes made on a different server instance propagate
+    // within ~30s instead of being pinned to whatever was loaded at boot.
+    try {
+      if (await allowList.has(email)) return true;
+    } catch (e: any) {
+      console.warn("[allowlist] has() lookup failed, denying:", e?.message);
+    }
+    return false;
   }
+
+  function isOwnerEmail(email: string | undefined): boolean {
+    if (!email) return false;
+    return OWNER_EMAILS.has(email.toLowerCase());
+  }
+
+  // Lightweight email validator. Sufficient for operator allow-list entries
+  // since the email is also verified by Firebase Auth at sign-in time.
+  const isValidEmail = (s: unknown): s is string =>
+    typeof s === "string" &&
+    s.length > 0 &&
+    s.length <= 254 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
   // Returns the resolved operator identity if the request is authorized,
   // null otherwise. Logs every grant/deny so operator activity is auditable.
@@ -119,7 +168,7 @@ async function startServer() {
 
     try {
       const decoded = await adminAuth.verifyIdToken(token);
-      if (!isAllowedOperator(decoded)) {
+      if (!(await isAllowedOperator(decoded))) {
         console.warn(
           `[auth] DENY (not on operator allow-list): uid=${decoded.uid} email=${decoded.email ?? "?"} ${req.method} ${req.path}`,
         );
@@ -181,7 +230,7 @@ async function startServer() {
       } else {
         try {
           const decoded = await adminAuth.verifyIdToken(token);
-          if (isAllowedOperator(decoded)) {
+          if (await isAllowedOperator(decoded)) {
             socket.data.isOperator = true;
             socket.data.operatorId = decoded.uid;
             socket.data.operatorEmail = decoded.email;
@@ -315,10 +364,128 @@ async function startServer() {
   });
 
   // Operator identity probe. The client calls this after Firebase sign-in
-  // to confirm whether the signed-in user is on the operator allow-list.
+  // to confirm whether the signed-in user is on the operator allow-list,
+  // and whether they additionally hold owner privileges (which gate the
+  // Admin tab + dynamic allow-list mutation endpoints).
   app.post("/api/auth/verify", authMiddleware, (req, res) => {
     const op = (req as any).operator as { uid: string; email?: string; method: string };
-    res.json({ success: true, uid: op.uid, email: op.email ?? null, method: op.method });
+    res.json({
+      success: true,
+      uid: op.uid,
+      email: op.email ?? null,
+      method: op.method,
+      isOwner: isOwnerEmail(op.email),
+    });
+  });
+
+  // ───────────── Admin: dynamic operator allow-list ─────────────
+  // Only owners (OWNER_EMAILS env var) can enumerate / mutate the dynamic
+  // allow-list or read the audit log. Owner status is sourced from env-only
+  // and cannot be granted via this API — that prevents a compromised dynamic
+  // entry from escalating itself.
+  const ownerOnly = (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    const op = (req as any).operator as { uid: string; email?: string } | undefined;
+    if (!op || !isOwnerEmail(op.email)) {
+      res.status(403).json({ ok: false, error: "Owner access required." });
+      return;
+    }
+    next();
+  };
+
+  app.get("/api/admin/operators", authMiddleware, ownerOnly, async (_req, res) => {
+    try {
+      const dynamic = await allowList.list();
+      res.json({
+        ok: true,
+        envOperatorEmails: [...OPERATOR_EMAILS].sort(),
+        envOperatorUids: [...OPERATOR_UIDS].sort(),
+        ownerEmails: [...OWNER_EMAILS].sort(),
+        dynamic,
+      });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e?.message });
+    }
+  });
+
+  app.post("/api/admin/operators", authMiddleware, ownerOnly, async (req, res) => {
+    try {
+      const rawEmail = String(req.body?.email ?? "").trim().toLowerCase();
+      const noteRaw = req.body?.note;
+      const note =
+        typeof noteRaw === "string" && noteRaw.trim().length > 0
+          ? noteRaw.trim().slice(0, 200)
+          : undefined;
+      if (!isValidEmail(rawEmail)) {
+        return res.status(400).json({ ok: false, error: "Invalid email address." });
+      }
+      if (OPERATOR_EMAILS.has(rawEmail)) {
+        return res
+          .status(409)
+          .json({ ok: false, error: "Email is already in the env-managed operator list." });
+      }
+      if (OWNER_EMAILS.has(rawEmail)) {
+        return res
+          .status(409)
+          .json({ ok: false, error: "Email is already an owner (and therefore an operator)." });
+      }
+      const op = (req as any).operator as { uid: string; email?: string };
+      const entry = await allowList.add(rawEmail, { uid: op.uid, email: op.email }, note);
+      res.json({ ok: true, entry });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e?.message });
+    }
+  });
+
+  app.delete(
+    "/api/admin/operators/:email",
+    authMiddleware,
+    ownerOnly,
+    async (req, res) => {
+      try {
+        const email = String(req.params.email ?? "").trim().toLowerCase();
+        if (!isValidEmail(email)) {
+          return res.status(400).json({ ok: false, error: "Invalid email address." });
+        }
+        if (OWNER_EMAILS.has(email)) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "Owners cannot be removed via the Admin panel. Update the OWNER_EMAILS env var.",
+          });
+        }
+        if (OPERATOR_EMAILS.has(email)) {
+          return res.status(400).json({
+            ok: false,
+            error:
+              "This email is sourced from the OPERATOR_EMAILS env var. Update the env var to remove it.",
+          });
+        }
+        const op = (req as any).operator as { uid: string; email?: string };
+        const removed = await allowList.remove(email, { uid: op.uid, email: op.email });
+        if (!removed) {
+          return res
+            .status(404)
+            .json({ ok: false, error: "Email not found in dynamic allow-list." });
+        }
+        res.json({ ok: true });
+      } catch (e: any) {
+        res.status(500).json({ ok: false, error: e?.message });
+      }
+    },
+  );
+
+  app.get("/api/admin/audit", authMiddleware, ownerOnly, async (req, res) => {
+    try {
+      const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+      const audit = await allowList.listAudit(limit);
+      res.json({ ok: true, audit });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e?.message });
+    }
   });
 
   app.post("/api/simulate", authMiddleware, (req, res) => {
@@ -469,14 +636,40 @@ async function startServer() {
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Stability Sentinel armed (AI ${sentinelAi ? "enabled" : "heuristic-only"})`);
-    const allowList = [
+    const envAllowList = [
       ...[...OPERATOR_EMAILS].map((e) => `email:${e}`),
       ...[...OPERATOR_UIDS].map((u) => `uid:${u}`),
+      ...[...OWNER_EMAILS].map((e) => `owner:${e}`),
     ];
     console.log(
-      `Operator allow-list: ${allowList.length === 0 ? "(empty — dev mode, all token-verifies denied)" : allowList.join(", ")}` +
+      `Operator allow-list (env): ${envAllowList.length === 0 ? "(empty — dev mode, all token-verifies denied)" : envAllowList.join(", ")}` +
         `${BREAK_GLASS_PASSWORD ? " | break-glass: ENABLED" : ""}`,
     );
+    console.log(
+      `Owners (can manage runtime allow-list via Admin tab): ${
+        OWNER_EMAILS.size === 0 ? "(none — set OWNER_EMAILS to enable Admin tab)" : [...OWNER_EMAILS].join(", ")
+      }`,
+    );
+    // Production guardrail: if owners can mutate the dynamic allow-list but
+    // we're persisting to a local JSON file, every server replica will keep
+    // its own private copy and changes will not propagate. This is fine on
+    // single-instance deploys (Replit GCE / Render single-web-service) but
+    // dangerous on horizontally-scaled hosts. Surface it loudly so the
+    // operator notices BEFORE inviting a teammate via the Admin tab.
+    if (
+      process.env.NODE_ENV === "production" &&
+      OWNER_EMAILS.size > 0 &&
+      !process.env.FIREBASE_SERVICE_ACCOUNT
+    ) {
+      console.warn(
+        "[allowlist] WARNING: Admin tab is enabled (OWNER_EMAILS set) but " +
+          "FIREBASE_SERVICE_ACCOUNT is not — operator changes will be saved to " +
+          "a local JSON file inside this server instance only. On any deployment " +
+          "with more than one replica, changes made on one replica will NOT be " +
+          "visible to the others. Set FIREBASE_SERVICE_ACCOUNT to use Firestore " +
+          "for shared persistence. See DEPLOY.md.",
+      );
+    }
   });
 }
 

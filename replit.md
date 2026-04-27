@@ -18,8 +18,8 @@ React + Vite frontend with an Express + Socket.IO backend (single server).
 - Replit deployment target: `gce` (Socket.IO needs persistent server). When Replit's deploy pipeline misbehaves, fall back to Render via `render.yaml` (or any host that reads `Procfile`). See `DEPLOY.md` for the 5-step Render walkthrough.
 
 ## Auth
-- **Per-user Firebase Auth.** Operators sign in with their own Google account. The server (`server.ts`) uses `firebase-admin` to verify each request's ID token (`Authorization: Bearer <id_token>`) and checks the resolved identity against an explicit allow-list set via the `OPERATOR_EMAILS` (and/or `OPERATOR_UIDS`) env vars. Every grant/deny is logged with the UID + email so operator activity is auditable.
-- In production (`NODE_ENV=production`) the server refuses to boot if both lists are empty. In dev the server still starts; without the allow-list every Firebase token verify is denied, so the only way to call operator endpoints in dev is to add yourself to `OPERATOR_EMAILS` (e.g. via `.env`) or set the optional `APP_PASSWORD_BREAKGLASS` shared token.
+- **Per-user Firebase Auth.** Operators sign in with their own Google account. The server (`server.ts`) uses `firebase-admin` to verify each request's ID token (`Authorization: Bearer <id_token>`) and checks the resolved identity against an explicit allow-list set via the `OPERATOR_EMAILS` (and/or `OPERATOR_UIDS`) env vars **plus** the dynamic allow-list managed at runtime via the in-app Admin tab. Every grant/deny is logged with the UID + email so operator activity is auditable.
+- In production (`NODE_ENV=production`) the server refuses to boot if `OPERATOR_EMAILS`, `OPERATOR_UIDS`, AND `OWNER_EMAILS` are all empty. In dev the server still starts; without the allow-list every Firebase token verify is denied, so the only way to call operator endpoints in dev is to add yourself to one of those lists (e.g. via `.env`) or set the optional `APP_PASSWORD_BREAKGLASS` shared token.
 - `APP_PASSWORD_BREAKGLASS` is the documented break-glass fallback — kept off by default (no implicit value), only honored when the env var is non-empty, and surfaced as a distinct `breakglass` identity in the audit log. The previous shared `APP_PASSWORD` flow has been removed.
 - Client wiring: `src/services/HealthEngine.ts` and `src/services/SentinelClient.ts` accept a token-provider callback and skip the call when no operator is signed in. `src/App.tsx` wires this to `auth.currentUser.getIdToken()` and re-handshakes the Socket.IO connection on auth-state changes so operator-room membership tracks the current user. See `DEPLOY.md` for full setup + how to add/remove operators.
 
@@ -93,3 +93,17 @@ Optional persistence layer. Plug in any Postgres connection string by setting `D
 - `SystemBoot.tsx`: meta panels (Provenance / Reproducibility / Citation) hidden below `md` so kernel log + progress + skip button fit one mobile viewport; header stacks; footer wraps; skip button full-width on phone.
 - `index.css`: added `.no-scrollbar` utility (was referenced in two places but undefined).
 - `main.tsx`: added `?showBoot=1` URL param to force-show the boot screen (clears `boss_booted` sessionStorage) — useful for verifying mobile layout without a fresh tab.
+
+## Admin tab — runtime operator allow-list (additive — Apr 2026)
+Owners can add/remove operator emails at runtime without redeploying. Adds a small `Admin` tab in the sidebar + top nav (only rendered when the signed-in user's email is in `OWNER_EMAILS`).
+
+- **Server (`server.ts`)**:
+  - New env var `OWNER_EMAILS` (comma-separated). Owners are implicitly operators AND can call admin endpoints.
+  - `/api/auth/verify` now also returns `{ isOwner }`.
+  - Endpoints (all `authMiddleware` + owner check): `GET /api/admin/operators`, `POST /api/admin/operators` (`{email, note?}`), `DELETE /api/admin/operators/:email`, `GET /api/admin/audit?limit=N`.
+  - `isAllowedOperator` now ORs the env lists with the dynamic Firestore-backed allow-list (read through a 30s in-memory cache; cache primed at boot, invalidated/written-through on mutation).
+  - Production boot guard now also accepts `OWNER_EMAILS` as a sufficient identity list.
+- **Persistence (`services/operatorAllowList.ts`)**: tries Firestore Admin SDK when `FIREBASE_SERVICE_ACCOUNT` is set, otherwise writes to `.local/operator-allow-list.json` and `.local/operator-access-audit.jsonl`. Writes are serialized via a write queue. Audit entries (`{ts, action, targetEmail, actorEmail, actorUid}`) are appended on every ADD/REMOVE.
+- **Firestore rules** (`firestore.rules`): `operatorAllowList` and `operatorAccessAudit` collections are denied to all clients — only the server (Admin SDK) writes them, which prevents an authenticated operator from escalating their own privileges via direct Firestore writes.
+- **Client (`src/components/AdminPanel.tsx`)**: add-operator form with email + optional note, table of dynamic operators with Remove buttons, read-only display of env-managed operators / owners, and a paginated audit log table. Owner-status check is server-driven (App.tsx fetches `/api/auth/verify` on every auth-state change and toggles tab visibility).
+- **Why owner status is env-only**: a runtime-mutable owner list would create an escalation path — anyone who could write to the dynamic allow-list could promote themselves to owner. Keeping owners in env vars only means the deployer is the root of trust.

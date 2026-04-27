@@ -19,7 +19,7 @@ import FullStackSimulation from './components/FullStackSimulation';
 import SystemInspector from './components/SystemInspector';
 import ErrorBoundary from './components/ErrorBoundary';
 import { motion, AnimatePresence } from 'motion/react';
-import { Microscope, Database, BrainCircuit, Network, Zap, Activity, ShieldAlert, Save, Trash2, LogIn, LogOut, Dna, Check, X, AlertTriangle, ArrowUpDown, Search, FlaskConical, Terminal, Binary, Brain, BookOpen, History, CloudUpload } from 'lucide-react';
+import { Microscope, Database, BrainCircuit, Network, Zap, Activity, ShieldAlert, Save, Trash2, LogIn, LogOut, Dna, Check, X, AlertTriangle, ArrowUpDown, Search, FlaskConical, Terminal, Binary, Brain, BookOpen, History, CloudUpload, Users } from 'lucide-react';
 import { auth, db, googleProvider, signInWithPopup, signOut, collection, addDoc, deleteDoc, doc, onSnapshot, query, where, orderBy, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, AreaChart, Area } from 'recharts';
@@ -29,6 +29,7 @@ import DataAnalyzer from './components/DataAnalyzer';
 import StabilitySentinel from './components/StabilitySentinel';
 import AboutPanel, { type ActiveTab } from './components/AboutPanel';
 import RunHistoryPanel from './components/RunHistoryPanel';
+import AdminPanel from './components/AdminPanel';
 import { SentinelClient } from './services/SentinelClient';
 
 export default function App() {
@@ -37,6 +38,7 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [isOwner, setIsOwner] = useState(false);
   const [agents, setAgents] = useState<AgentState[]>([]);
   const [signals, setSignals] = useState<BioSignal[]>([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -356,6 +358,37 @@ export default function App() {
     });
 
     return () => unsubscribe();
+  }, [user]);
+
+  // 2b. Resolve operator/owner status from the server. The server is the
+  // source of truth for OWNER_EMAILS — the client only knows the signed-in
+  // identity. Falls back to !isOwner on any failure (Admin tab stays hidden).
+  useEffect(() => {
+    let cancelled = false;
+    if (!user) {
+      setIsOwner(false);
+      return;
+    }
+    (async () => {
+      try {
+        const token = await user.getIdToken();
+        const res = await fetch('/api/auth/verify', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          if (!cancelled) setIsOwner(false);
+          return;
+        }
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setIsOwner(!!body?.isOwner);
+      } catch {
+        if (!cancelled) setIsOwner(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [user]);
 
   const agentsRef = useRef(agents);
@@ -917,6 +950,19 @@ export default function App() {
           >
             <History size={20} />
           </button>
+          {isOwner && (
+            <button
+              onClick={() => setActiveTab('ADMIN')}
+              className={`p-3 rounded-xl transition-all ${
+                activeTab === 'ADMIN'
+                  ? 'bg-emerald-800 text-amber-300 shadow-inner'
+                  : 'text-emerald-500 hover:text-emerald-300'
+              }`}
+              title="Admin · Operator Access"
+            >
+              <Users size={20} />
+            </button>
+          )}
         </nav>
       </div>
 
@@ -995,6 +1041,18 @@ export default function App() {
               >
                 <History size={14} /> History
               </button>
+              {isOwner && (
+                <button
+                  onClick={() => setActiveTab('ADMIN')}
+                  className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    activeTab === 'ADMIN'
+                      ? 'bg-amber-400 text-emerald-950 shadow-sm'
+                      : 'text-emerald-400 hover:text-emerald-200'
+                  }`}
+                >
+                  <Users size={14} /> Admin
+                </button>
+              )}
             </nav>
             {user ? (
               <div className="flex items-center gap-2 md:gap-4 shrink-0">
@@ -1681,6 +1739,16 @@ export default function App() {
                 className="h-full overflow-hidden"
               >
                 <RunHistoryPanel isOperator={!!user} refreshKey={historyRefreshKey} />
+              </motion.div>
+            ) : activeTab === 'ADMIN' ? (
+              <motion.div
+                key="admin"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                className="h-full overflow-hidden"
+              >
+                <AdminPanel isOwner={isOwner} />
               </motion.div>
             ) : activeTab === 'ABOUT' ? (
               <motion.div
