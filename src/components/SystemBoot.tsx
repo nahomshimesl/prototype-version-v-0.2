@@ -29,6 +29,8 @@ interface BootStep {
   subProgress?: SubProgress;
 }
 
+const BOOT_SPEED_MULT = 0.5;
+
 const BOOT_SEQUENCE: BootStep[] = [
   { module: 'core',     text: 'Initializing runtime supervisor', durationMs: 280, detail: 'pid 1 · cgroup v2' },
   { module: 'license',  text: 'Validating institutional license', durationMs: 360, detail: 'Apache-2.0 · academic use' },
@@ -148,7 +150,7 @@ export default function SystemBoot({ onComplete }: SystemBootProps) {
 
   // Estimated total runtime (seconds)
   const totalDurationSec = useMemo(
-    () => BOOT_SEQUENCE.reduce((acc, s) => acc + s.durationMs, 0) / 1000 + 1.4,
+    () => (BOOT_SEQUENCE.reduce((acc, s) => acc + s.durationMs, 0) * BOOT_SPEED_MULT) / 1000 + 1.4,
     []
   );
 
@@ -190,12 +192,14 @@ export default function SystemBoot({ onComplete }: SystemBootProps) {
         return [...prev, { id, module: step.module, text: step.text, status: 'running', detail: initialDetail }];
       });
 
+      const effectiveDurationMs = step.durationMs * BOOT_SPEED_MULT;
+
       let subInterval: ReturnType<typeof setInterval> | null = null;
       if (step.subProgress) {
         const sp = step.subProgress;
         subInterval = setInterval(() => {
           if (!activeRef.current) return;
-          const fraction = Math.min(1, (performance.now() - startedAtMs) / step.durationMs);
+          const fraction = Math.min(1, (performance.now() - startedAtMs) / effectiveDurationMs);
           const detailText = formatSubProgress(sp, fraction);
           setLines((prev) =>
             prev.map((l) => (l.id === id ? { ...l, detail: detailText } : l))
@@ -227,7 +231,7 @@ export default function SystemBoot({ onComplete }: SystemBootProps) {
         idx++;
         setProgress(Math.round((idx / total) * 100));
         runNext();
-      }, step.durationMs);
+      }, effectiveDurationMs);
     };
 
     runNext();
