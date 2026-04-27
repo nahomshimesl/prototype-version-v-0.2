@@ -61,19 +61,31 @@ export default defineConfig(({mode}) => {
           navigateFallbackDenylist: [/^\/api\//, /^\/socket\.io\//],
           runtimeCaching: [
             {
-              // Network-first so live data wins when online, but a recent
-              // cached GET response is served when the device is offline so
-              // the app stays usable. Short TTL keeps stale operator data
-              // from lingering. Workbox only caches GET by default; POST/
-              // PUT/DELETE always go straight to the network.
-              urlPattern: ({url}) => url.pathname.startsWith('/api/'),
+              // Network-first only for explicitly public GET endpoints —
+              // status + the public sentinel report. Live data wins when
+              // online; on offline / cold-Render-wakeup the app stays
+              // usable. Short TTL + 200-only cache. Workbox caches GET
+              // only by default. Authenticated operator endpoints fall
+              // through to the catch-all NetworkOnly rule below so no
+              // private data is ever cached on disk.
+              urlPattern: ({url}) =>
+                url.pathname === '/api/db/status' ||
+                url.pathname === '/api/sentinel/report',
               handler: 'NetworkFirst',
               options: {
-                cacheName: 'boss-api',
+                cacheName: 'boss-api-public',
                 networkTimeoutSeconds: 5,
-                expiration: {maxEntries: 32, maxAgeSeconds: 60 * 5},
-                cacheableResponse: {statuses: [0, 200]},
+                expiration: {maxEntries: 8, maxAgeSeconds: 60 * 5},
+                cacheableResponse: {statuses: [200]},
               },
+            },
+            {
+              // Catch-all for the rest of /api/* — auth-gated endpoints,
+              // POSTs, admin/operator routes — must always hit the
+              // network so no private response is ever served from cache.
+              urlPattern: ({url}) => url.pathname.startsWith('/api/'),
+              handler: 'NetworkOnly',
+              options: {cacheName: 'boss-api-private'},
             },
             {
               // Live socket transport must never be intercepted.
