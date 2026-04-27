@@ -19,7 +19,7 @@ import FullStackSimulation from './components/FullStackSimulation';
 import SystemInspector from './components/SystemInspector';
 import ErrorBoundary from './components/ErrorBoundary';
 import { motion, AnimatePresence } from 'motion/react';
-import { Microscope, Database, BrainCircuit, Network, Zap, Activity, ShieldAlert, Save, Trash2, LogIn, LogOut, Dna, Check, X, AlertTriangle, ArrowUpDown, Search, FlaskConical, Terminal, Binary, Brain, BookOpen } from 'lucide-react';
+import { Microscope, Database, BrainCircuit, Network, Zap, Activity, ShieldAlert, Save, Trash2, LogIn, LogOut, Dna, Check, X, AlertTriangle, ArrowUpDown, Search, FlaskConical, Terminal, Binary, Brain, BookOpen, History, CloudUpload } from 'lucide-react';
 import { auth, db, googleProvider, signInWithPopup, signOut, collection, addDoc, deleteDoc, doc, onSnapshot, query, where, orderBy, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, AreaChart, Area } from 'recharts';
@@ -28,6 +28,7 @@ import TelemetryViewer from './components/TelemetryViewer';
 import DataAnalyzer from './components/DataAnalyzer';
 import StabilitySentinel from './components/StabilitySentinel';
 import AboutPanel, { type ActiveTab } from './components/AboutPanel';
+import RunHistoryPanel from './components/RunHistoryPanel';
 import { SentinelClient } from './services/SentinelClient';
 
 export default function App() {
@@ -81,6 +82,9 @@ export default function App() {
   const [groupingMode, setGroupingMode] = useState<'NONE' | 'TYPE' | 'HEALTH'>('NONE');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [visualizerFilter, setVisualizerFilter] = useState<Set<string>>(new Set());
+  const [saveRunState, setSaveRunState] = useState<'IDLE' | 'SAVING' | 'OK' | 'ERROR'>('IDLE');
+  const [saveRunMessage, setSaveRunMessage] = useState<string | null>(null);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   
   const mutationCooldowns = useRef<Record<string, number>>({});
   const frameCount = useRef(0);
@@ -676,6 +680,70 @@ export default function App() {
     }
   };
 
+  const handleSaveRun = useCallback(async () => {
+    if (saveRunState === 'SAVING') return;
+    if (!user) {
+      setSaveRunState('ERROR');
+      setSaveRunMessage('Sign in with an operator account to save runs.');
+      return;
+    }
+    setSaveRunState('SAVING');
+    setSaveRunMessage(null);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch('/api/db/runs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          final_step: metrics.step,
+          final_health: metrics.averageHealth,
+          agent_count: metrics.totalAgents,
+          notes: {
+            savedAt: new Date().toISOString(),
+            isRunning,
+            simulationSpeed,
+            entropy: metrics.entropy,
+            signalDensity: metrics.signalDensity,
+            failureRate: metrics.failureRate,
+            anomalies: metrics.anomalies.slice(-5),
+            healthScore: health.overallScore,
+            activeIncidents: health.activeIncidents.length,
+            dna,
+          },
+        }),
+      });
+      const text = await res.text();
+      let body: any = null;
+      try { body = text ? JSON.parse(text) : null; } catch { body = null; }
+      if (!res.ok) {
+        const msg = body?.error || `Save failed (${res.status})`;
+        setSaveRunState('ERROR');
+        setSaveRunMessage(msg);
+        return;
+      }
+      setSaveRunState('OK');
+      setSaveRunMessage(`Run #${body?.run?.id ?? ''} saved.`);
+      setHistoryRefreshKey((k) => k + 1);
+    } catch (e: any) {
+      setSaveRunState('ERROR');
+      setSaveRunMessage(e?.message || 'Network error while saving run.');
+    }
+  }, [user, metrics, health, dna, isRunning, simulationSpeed, saveRunState]);
+
+  // Auto-clear the save-run feedback after a few seconds.
+  useEffect(() => {
+    if (saveRunState === 'OK' || saveRunState === 'ERROR') {
+      const t = setTimeout(() => {
+        setSaveRunState('IDLE');
+        setSaveRunMessage(null);
+      }, 4000);
+      return () => clearTimeout(t);
+    }
+  }, [saveRunState]);
+
   const toggleGroupCollapse = (groupId: string) => {
     setCollapsedGroups(prev => {
       const next = new Set(prev);
@@ -838,6 +906,17 @@ export default function App() {
           >
             <FlaskConical size={20} />
           </button>
+          <button
+            onClick={() => setActiveTab('HISTORY')}
+            className={`p-3 rounded-xl transition-all ${
+              activeTab === 'HISTORY'
+                ? 'bg-emerald-800 text-indigo-300 shadow-inner'
+                : 'text-emerald-500 hover:text-emerald-300'
+            }`}
+            title="Run History"
+          >
+            <History size={20} />
+          </button>
         </nav>
       </div>
 
@@ -905,6 +984,16 @@ export default function App() {
                 }`}
               >
                 <ShieldAlert size={14} /> Health Engine
+              </button>
+              <button
+                onClick={() => setActiveTab('HISTORY')}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  activeTab === 'HISTORY'
+                    ? 'bg-indigo-500 text-white shadow-sm'
+                    : 'text-emerald-400 hover:text-emerald-200'
+                }`}
+              >
+                <History size={14} /> History
               </button>
             </nav>
             {user ? (
@@ -1223,6 +1312,54 @@ export default function App() {
             </div>
           </div>
 
+          {/* Persisted Runs Save Bar */}
+          <div className="bg-white rounded-3xl border border-slate-200 p-4 md:p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-indigo-50 rounded-xl flex items-center justify-center text-indigo-600">
+                <Database size={18} />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-slate-900">Persisted Run History</div>
+                <div className="text-[11px] text-slate-500">
+                  Save the current snapshot to the operator database — browse later from the History tab.
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              {saveRunMessage && (
+                <div className={`text-[11px] font-bold px-3 py-1.5 rounded-full ${
+                  saveRunState === 'OK'
+                    ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                    : saveRunState === 'ERROR'
+                    ? 'bg-rose-50 text-rose-600 border border-rose-100'
+                    : 'bg-slate-50 text-slate-500 border border-slate-100'
+                }`}>
+                  {saveRunMessage}
+                </div>
+              )}
+              <button
+                onClick={handleSaveRun}
+                disabled={!user || saveRunState === 'SAVING'}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition-all ${
+                  !user || saveRunState === 'SAVING'
+                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    : 'bg-indigo-500 text-white hover:bg-indigo-600'
+                }`}
+                title={user ? 'Save current run to the database' : 'Sign in to save runs'}
+              >
+                <CloudUpload size={14} className={saveRunState === 'SAVING' ? 'animate-pulse' : ''} />
+                {saveRunState === 'SAVING' ? 'Saving…' : 'Save current run'}
+              </button>
+              <button
+                onClick={() => setActiveTab('HISTORY')}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl font-bold text-xs text-indigo-600 hover:bg-indigo-50 transition-all"
+              >
+                <History size={14} />
+                View history
+              </button>
+            </div>
+          </div>
+
           {/* Research Logs Section */}
           <div className="bg-white rounded-3xl border border-slate-200 p-6 flex flex-col gap-4 max-h-[500px] overflow-hidden">
             <div className="flex items-center justify-between">
@@ -1534,6 +1671,16 @@ export default function App() {
                 className="h-full overflow-y-auto p-4"
               >
                 <StabilitySentinel />
+              </motion.div>
+            ) : activeTab === 'HISTORY' ? (
+              <motion.div
+                key="history"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                className="h-full overflow-hidden"
+              >
+                <RunHistoryPanel isOperator={!!user} refreshKey={historyRefreshKey} />
               </motion.div>
             ) : activeTab === 'ABOUT' ? (
               <motion.div
