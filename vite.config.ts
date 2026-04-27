@@ -19,7 +19,7 @@ export default defineConfig(({mode}) => {
           'icons/icon.svg',
         ],
         manifest: {
-          name: 'BOSS — Bio-Organoid Simulation System',
+          name: 'BOSS',
           short_name: 'BOSS',
           description:
             'Research-grade simulation platform for biological ecosystems with full-stack metabolic flux engine and AI failure prediction.',
@@ -61,11 +61,22 @@ export default defineConfig(({mode}) => {
           navigateFallbackDenylist: [/^\/api\//, /^\/socket\.io\//],
           runtimeCaching: [
             {
+              // Network-first so live data wins when online, but a recent
+              // cached GET response is served when the device is offline so
+              // the app stays usable. Short TTL keeps stale operator data
+              // from lingering. Workbox only caches GET by default; POST/
+              // PUT/DELETE always go straight to the network.
               urlPattern: ({url}) => url.pathname.startsWith('/api/'),
-              handler: 'NetworkOnly',
-              options: {cacheName: 'boss-api'},
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'boss-api',
+                networkTimeoutSeconds: 5,
+                expiration: {maxEntries: 32, maxAgeSeconds: 60 * 5},
+                cacheableResponse: {statuses: [0, 200]},
+              },
             },
             {
+              // Live socket transport must never be intercepted.
               urlPattern: ({url}) => url.pathname.startsWith('/socket.io/'),
               handler: 'NetworkOnly',
               options: {cacheName: 'boss-socket'},
