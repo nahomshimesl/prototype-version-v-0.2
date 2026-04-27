@@ -135,12 +135,33 @@ export default function App() {
 
   // 1. Initialize Simulation & Auth
   useEffect(() => {
-    // Initialize Socket.io
-    socketRef.current = io();
+    // Per-user Firebase ID token provider. Returns null if no operator is
+    // signed in, in which case operator-gated calls (HealthEngine backend
+    // sync, Sentinel mutate endpoints) are skipped/rejected client-side.
+    const getOperatorIdToken = async (): Promise<string | null> => {
+      const u = auth.currentUser;
+      if (!u) return null;
+      try {
+        return await u.getIdToken();
+      } catch {
+        return null;
+      }
+    };
+
+    // Initialize Socket.io. The auth callback runs on every (re)connect,
+    // so reconnecting after a sign-in is enough to upgrade to operator
+    // status server-side.
+    socketRef.current = io({
+      auth: async (cb: (data: { token?: string }) => void) => {
+        const token = await getOperatorIdToken();
+        cb(token ? { token } : {});
+      },
+    });
     socketRef.current.emit("join-session", "simulation-room-1");
 
     // Install Stability Sentinel error capture + live event subscription
     SentinelClient.install(socketRef.current);
+    SentinelClient.setTokenProvider(getOperatorIdToken);
 
     socketRef.current.on("health-update", (healthUpdate: any) => {
       // Potentially update health state or logs
@@ -257,12 +278,25 @@ export default function App() {
       isProcessingRef.current = false;
     };
 
-    // Initialize HealthEngine Backend
-    healthEngine.setBackendConfig(true, "organoid2026");
+    // Initialize HealthEngine Backend with the per-user token provider.
+    // syncToBackend will skip the call entirely if no operator is signed in,
+    // so non-operator visitors don't generate 401 noise.
+    healthEngine.setBackendConfig(true, getOperatorIdToken);
 
     const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setIsAuthReady(true);
+      // Re-handshake the socket so the server picks up the new (or cleared)
+      // ID token and adjusts operator-room membership accordingly.
+      const sock = socketRef.current;
+      if (sock) {
+        try {
+          sock.disconnect();
+          sock.connect();
+        } catch {
+          // best-effort; socket.io handles its own retry/backoff
+        }
+      }
     });
 
     const initialAgents = createInitialAgents(50);

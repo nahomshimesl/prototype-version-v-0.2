@@ -3,12 +3,70 @@ import { createServer as createViteServer } from "vite";
 import http from "http";
 import { Server } from "socket.io";
 import path from "path";
-import { fileURLToPath } from "url";
+import { readFileSync } from "fs";
 import dotenv from "dotenv";
+import { initializeApp, cert, getApps, type App as AdminApp } from "firebase-admin/app";
+import { getAuth as getAdminAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { Sentinel } from "./services/sentinel.js";
 import * as db from "./services/db.js";
 
 dotenv.config();
+
+// ───────────── Firebase Admin (per-user operator auth) ─────────────
+// We verify the caller's Firebase ID token on every operator request and
+// check it against an explicit allow-list. The Admin SDK's verifyIdToken
+// only needs a project ID — Google's token-signing public keys are fetched
+// from a public endpoint — so a service-account credential is optional.
+// If FIREBASE_SERVICE_ACCOUNT (JSON) is provided, we use it; otherwise we
+// initialize with projectId only, which is sufficient for token verification.
+const firebaseConfig = JSON.parse(
+  readFileSync(path.join(process.cwd(), "firebase-applet-config.json"), "utf-8"),
+) as { projectId: string };
+
+function initAdminApp(): AdminApp {
+  if (getApps().length > 0) return getApps()[0]!;
+  const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (sa && sa.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(sa);
+      return initializeApp({
+        credential: cert(parsed),
+        projectId: parsed.project_id || firebaseConfig.projectId,
+      });
+    } catch (e) {
+      console.warn(
+        "FIREBASE_SERVICE_ACCOUNT was set but could not be parsed as JSON; falling back to projectId-only init.",
+        (e as Error)?.message,
+      );
+    }
+  }
+  return initializeApp({ projectId: firebaseConfig.projectId });
+}
+
+const adminApp = initAdminApp();
+const adminAuth = getAdminAuth(adminApp);
+
+// Operator allow-list. Either or both env vars may be set; entries are
+// trimmed and lower-cased for emails. If both are empty in production the
+// server refuses to boot — otherwise no one would be able to authenticate.
+function parseList(envVal: string | undefined, lower: boolean): Set<string> {
+  if (!envVal) return new Set();
+  return new Set(
+    envVal
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => (lower ? s.toLowerCase() : s)),
+  );
+}
+const OPERATOR_EMAILS = parseList(process.env.OPERATOR_EMAILS, true);
+const OPERATOR_UIDS = parseList(process.env.OPERATOR_UIDS, false);
+
+// Optional break-glass shared password. This intentionally has no default
+// fallback: if the env var is unset, the break-glass path is fully closed.
+// It exists only so an operator can recover access if Firebase Auth itself
+// is unavailable. Keep this rotated and short-lived.
+const BREAK_GLASS_PASSWORD = process.env.APP_PASSWORD_BREAKGLASS || "";
 
 async function startServer() {
   const app = express();
@@ -18,25 +76,77 @@ async function startServer() {
 
   app.use(express.json({ limit: "256kb" }));
 
-  // Simple Password Protection Middleware
-  // In production, refuse to boot without APP_PASSWORD set — the fallback below
-  // is in public source and would leave operator endpoints effectively open.
-  if (process.env.NODE_ENV === "production" && !process.env.APP_PASSWORD) {
+  // In production refuse to boot without a usable operator allow-list. The
+  // previous APP_PASSWORD-only mode left a single shared secret with no
+  // identity or audit trail; we now require explicit per-user accounts.
+  if (process.env.NODE_ENV === "production" && OPERATOR_EMAILS.size === 0 && OPERATOR_UIDS.size === 0) {
     console.error(
-      "FATAL: APP_PASSWORD must be set in production. Set it to a long random string in your host's environment variables. See DEPLOY.md for details.",
+      "FATAL: OPERATOR_EMAILS (or OPERATOR_UIDS) must be set in production. " +
+        "Comma-separated list of Firebase Auth identities allowed to access operator endpoints. See DEPLOY.md.",
     );
     process.exit(1);
   }
-  const APP_PASSWORD = process.env.APP_PASSWORD || "organoid2026";
+
   const OPERATOR_ROOM = "operators";
 
-  const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader === `Bearer ${APP_PASSWORD}`) {
-      next();
-    } else {
-      res.status(401).json({ error: "Unauthorized. Please provide the correct access key." });
+  function isAllowedOperator(decoded: DecodedIdToken): boolean {
+    if (OPERATOR_UIDS.has(decoded.uid)) return true;
+    const email = (decoded.email || "").toLowerCase();
+    if (!email) return false;
+    if (!decoded.email_verified) return false;
+    return OPERATOR_EMAILS.has(email);
+  }
+
+  // Returns the resolved operator identity if the request is authorized,
+  // null otherwise. Logs every grant/deny so operator activity is auditable.
+  async function authorizeRequest(
+    req: express.Request,
+  ): Promise<{ uid: string; email?: string; method: "firebase" | "breakglass" } | null> {
+    const header = req.headers.authorization;
+    if (!header || !header.startsWith("Bearer ")) return null;
+    const token = header.slice("Bearer ".length).trim();
+    if (!token) return null;
+
+    // Break-glass path: ONLY active when the env var is set to a non-empty
+    // value AND the presented token matches it exactly. Surfaced as a
+    // distinct identity in audit logs.
+    if (BREAK_GLASS_PASSWORD && token === BREAK_GLASS_PASSWORD) {
+      console.warn(
+        `[auth] BREAK-GLASS access granted to ${req.method} ${req.path} from ${req.ip}. Rotate APP_PASSWORD_BREAKGLASS afterward.`,
+      );
+      return { uid: "breakglass", method: "breakglass" };
     }
+
+    try {
+      const decoded = await adminAuth.verifyIdToken(token);
+      if (!isAllowedOperator(decoded)) {
+        console.warn(
+          `[auth] DENY (not on operator allow-list): uid=${decoded.uid} email=${decoded.email ?? "?"} ${req.method} ${req.path}`,
+        );
+        return null;
+      }
+      console.log(
+        `[auth] GRANT uid=${decoded.uid} email=${decoded.email ?? "?"} ${req.method} ${req.path}`,
+      );
+      return { uid: decoded.uid, email: decoded.email, method: "firebase" };
+    } catch (e: any) {
+      console.warn(`[auth] DENY (token verify failed): ${e?.code || e?.message} ${req.method} ${req.path}`);
+      return null;
+    }
+  }
+
+  const authMiddleware = async (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    const ident = await authorizeRequest(req);
+    if (!ident) {
+      res.status(401).json({ error: "Unauthorized. Sign in with an operator account." });
+      return;
+    }
+    (req as any).operator = ident;
+    next();
   };
 
   // ───────────── Stability Sentinel ─────────────
@@ -55,21 +165,41 @@ async function startServer() {
     : null;
   const sentinel = new Sentinel({ io, ai: sentinelAi, operatorRoom: OPERATOR_ROOM });
 
-  // Socket.io authentication. Connections without the operator token are still
-  // accepted (so anonymous clients can be served the SPA via the same server),
-  // but only authenticated sockets are added to the OPERATOR_ROOM where
-  // sensitive diagnostic events are broadcast.
-  io.use((socket, next) => {
+  // Socket.io authentication. Connections without a valid operator token are
+  // still accepted (so anonymous clients can be served the SPA via the same
+  // server), but only authenticated sockets are added to the OPERATOR_ROOM
+  // where sensitive diagnostic events are broadcast.
+  io.use(async (socket, next) => {
     const token = (socket.handshake.auth as any)?.token
       || (socket.handshake.headers as any)?.["x-access-key"];
-    socket.data.isOperator = token === APP_PASSWORD;
+    socket.data.isOperator = false;
+    socket.data.operatorId = null;
+    if (typeof token === "string" && token.length > 0) {
+      if (BREAK_GLASS_PASSWORD && token === BREAK_GLASS_PASSWORD) {
+        socket.data.isOperator = true;
+        socket.data.operatorId = "breakglass";
+      } else {
+        try {
+          const decoded = await adminAuth.verifyIdToken(token);
+          if (isAllowedOperator(decoded)) {
+            socket.data.isOperator = true;
+            socket.data.operatorId = decoded.uid;
+            socket.data.operatorEmail = decoded.email;
+          }
+        } catch {
+          // Invalid token → anonymous socket, no error to caller.
+        }
+      }
+    }
     next();
   });
 
   io.on("connection", (socket) => {
     if (socket.data.isOperator) {
       socket.join(OPERATOR_ROOM);
-      console.log("Operator connected:", socket.id);
+      console.log(
+        `Operator socket connected: ${socket.id} (uid=${socket.data.operatorId} email=${socket.data.operatorEmail ?? "?"})`,
+      );
     } else {
       console.log("Anonymous client connected:", socket.id);
     }
@@ -184,9 +314,11 @@ async function startServer() {
     }
   });
 
-  // Biological Simulation Endpoint
+  // Operator identity probe. The client calls this after Firebase sign-in
+  // to confirm whether the signed-in user is on the operator allow-list.
   app.post("/api/auth/verify", authMiddleware, (req, res) => {
-    res.json({ success: true });
+    const op = (req as any).operator as { uid: string; email?: string; method: string };
+    res.json({ success: true, uid: op.uid, email: op.email ?? null, method: op.method });
   });
 
   app.post("/api/simulate", authMiddleware, (req, res) => {
@@ -233,7 +365,8 @@ async function startServer() {
   });
 
   app.post("/api/system/logs", authMiddleware, (req, res) => {
-    const log = { ...req.body, serverTimestamp: new Date().toISOString() };
+    const op = (req as any).operator as { uid: string };
+    const log = { ...req.body, serverTimestamp: new Date().toISOString(), operatorUid: op.uid };
     systemLogs.push(log);
     if (systemLogs.length > 500) systemLogs.shift();
     io.to(OPERATOR_ROOM).emit('log-added', log);
@@ -247,7 +380,7 @@ async function startServer() {
   // get a separate eviction budget and cannot push trusted incidents out of
   // the operator-visible store. All read/mutate endpoints require auth.
 
-  app.post("/api/sentinel/report", rateLimitReport, (req, res) => {
+  app.post("/api/sentinel/report", rateLimitReport, async (req, res) => {
     try {
       const body = req.body ?? {};
       // Hard size/type validation. Anything beyond these caps is silently truncated.
@@ -266,8 +399,13 @@ async function startServer() {
         }
       }
 
-      // Whether to treat the caller as trusted (operator) or anonymous.
-      const trusted = req.headers.authorization === `Bearer ${APP_PASSWORD}`;
+      // Whether to treat the caller as a trusted operator or anonymous. We
+      // verify the bearer token (if any) the same way as authMiddleware but
+      // do NOT reject unauthenticated callers — anonymous reports just get
+      // flagged as `trusted: false` and bucketed into a separate eviction
+      // budget by the Sentinel store.
+      const ident = await authorizeRequest(req);
+      const trusted = !!ident;
 
       const inc = sentinel.report({
         source: sanitizeStr(body.source, 64) ?? (trusted ? "browser" : "untrusted-browser"),
@@ -331,6 +469,14 @@ async function startServer() {
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`Stability Sentinel armed (AI ${sentinelAi ? "enabled" : "heuristic-only"})`);
+    const allowList = [
+      ...[...OPERATOR_EMAILS].map((e) => `email:${e}`),
+      ...[...OPERATOR_UIDS].map((u) => `uid:${u}`),
+    ];
+    console.log(
+      `Operator allow-list: ${allowList.length === 0 ? "(empty — dev mode, all token-verifies denied)" : allowList.join(", ")}` +
+        `${BREAK_GLASS_PASSWORD ? " | break-glass: ENABLED" : ""}`,
+    );
   });
 }
 

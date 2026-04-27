@@ -18,7 +18,10 @@ React + Vite frontend with an Express + Socket.IO backend (single server).
 - Replit deployment target: `gce` (Socket.IO needs persistent server). When Replit's deploy pipeline misbehaves, fall back to Render via `render.yaml` (or any host that reads `Procfile`). See `DEPLOY.md` for the 5-step Render walkthrough.
 
 ## Auth
-- API endpoints gated by `APP_PASSWORD` env. In dev (no `NODE_ENV`) it falls back to `organoid2026` so local work needs no setup. In production (`NODE_ENV=production`) the server refuses to boot if `APP_PASSWORD` is unset — see `DEPLOY.md`.
+- **Per-user Firebase Auth.** Operators sign in with their own Google account. The server (`server.ts`) uses `firebase-admin` to verify each request's ID token (`Authorization: Bearer <id_token>`) and checks the resolved identity against an explicit allow-list set via the `OPERATOR_EMAILS` (and/or `OPERATOR_UIDS`) env vars. Every grant/deny is logged with the UID + email so operator activity is auditable.
+- In production (`NODE_ENV=production`) the server refuses to boot if both lists are empty. In dev the server still starts; without the allow-list every Firebase token verify is denied, so the only way to call operator endpoints in dev is to add yourself to `OPERATOR_EMAILS` (e.g. via `.env`) or set the optional `APP_PASSWORD_BREAKGLASS` shared token.
+- `APP_PASSWORD_BREAKGLASS` is the documented break-glass fallback — kept off by default (no implicit value), only honored when the env var is non-empty, and surfaced as a distinct `breakglass` identity in the audit log. The previous shared `APP_PASSWORD` flow has been removed.
+- Client wiring: `src/services/HealthEngine.ts` and `src/services/SentinelClient.ts` accept a token-provider callback and skip the call when no operator is signed in. `src/App.tsx` wires this to `auth.currentUser.getIdToken()` and re-handshakes the Socket.IO connection on auth-state changes so operator-room membership tracks the current user. See `DEPLOY.md` for full setup + how to add/remove operators.
 
 ## Stability Sentinel (reliability subsystem)
 

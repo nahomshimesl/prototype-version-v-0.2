@@ -62,7 +62,11 @@ export class HealthEngine {
   private incidentLog: HealthIncident[] = [];
   private systemLogs: SystemLog[] = [];
   private backendEnabled = false;
-  private accessKey = "organoid2026";
+  // Per-user Firebase ID token provider. Returns a fresh token for each
+  // backend call (Firebase auto-refreshes when needed). Returning null means
+  // the user is not currently signed in / not authorized — in which case we
+  // skip the backend sync rather than send an unauthenticated request.
+  private getIdToken: (() => Promise<string | null>) | null = null;
 
   constructor() {
     this.setupGlobalHandlers();
@@ -84,21 +88,33 @@ export class HealthEngine {
     }
   }
 
-  public setBackendConfig(enabled: boolean, key: string) {
+  public setBackendConfig(enabled: boolean, getIdToken: (() => Promise<string | null>) | null) {
     this.backendEnabled = enabled;
-    this.accessKey = key;
+    this.getIdToken = getIdToken;
   }
 
   private async syncToBackend(log?: SystemLog) {
-    if (!this.backendEnabled) return;
+    if (!this.backendEnabled || !this.getIdToken) return;
 
+    let token: string | null = null;
+    try {
+      token = await this.getIdToken();
+    } catch {
+      token = null;
+    }
+    // No signed-in operator → skip the call entirely. Sending an
+    // unauthenticated request would just produce a 401 and fill the
+    // browser console with noise.
+    if (!token) return;
+
+    const auth = `Bearer ${token}`;
     try {
       if (log) {
         await fetch('/api/system/logs', {
           method: 'POST',
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.accessKey}`
+            'Authorization': auth,
           },
           body: JSON.stringify(log)
         });
@@ -106,9 +122,9 @@ export class HealthEngine {
 
       await fetch('/api/system/health', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.accessKey}`
+          'Authorization': auth,
         },
         body: JSON.stringify({
           score: this.state.overallScore,

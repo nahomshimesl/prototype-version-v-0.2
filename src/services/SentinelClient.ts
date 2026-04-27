@@ -29,7 +29,11 @@ class SentinelClientImpl {
   private installed = false;
   private retryHandlers = new Set<(payload: any) => void>();
   private resetHandlers = new Set<() => void>();
-  private accessKey = "organoid2026";
+  // Per-user Firebase ID token provider. Returns null if there is no signed-in
+  // operator; in that case, mutate calls (analyze/recover/acknowledge) will
+  // fail fast with a clear "not signed in" error rather than blasting the
+  // server with unauthenticated requests.
+  private getIdToken: (() => Promise<string | null>) | null = null;
 
   install(socket?: Socket | null) {
     if (this.installed) return;
@@ -73,7 +77,16 @@ class SentinelClientImpl {
     }
   }
 
-  setAccessKey(key: string) { this.accessKey = key; }
+  setTokenProvider(getIdToken: (() => Promise<string | null>) | null) {
+    this.getIdToken = getIdToken;
+  }
+
+  private async authHeader(): Promise<Record<string, string>> {
+    if (!this.getIdToken) throw new Error("Operator sign-in required.");
+    const token = await this.getIdToken();
+    if (!token) throw new Error("Operator sign-in required.");
+    return { Authorization: `Bearer ${token}` };
+  }
 
   trackAction(name: string) {
     this.actionHistory.unshift(`${new Date().toISOString().slice(11, 19)} ${name}`);
@@ -97,15 +110,32 @@ class SentinelClientImpl {
     }
   }
 
-  async fetchIncidents() { return (await fetch("/api/sentinel/incidents")).json(); }
-  async fetchAnomalies() { return (await fetch("/api/sentinel/anomalies")).json(); }
-  async fetchStats() { return (await fetch("/api/sentinel/stats")).json(); }
-  async fetchActions() { return (await fetch("/api/sentinel/recovery-actions")).json(); }
+  // Sentinel read endpoints are operator-gated server-side, so every fetch
+  // must carry the per-user ID token. authHeader() throws "Operator sign-in
+  // required." when no operator is signed in, which the dashboard catches
+  // and surfaces as an empty state rather than spamming 401s.
+  async fetchIncidents() {
+    const auth = await this.authHeader();
+    return (await fetch("/api/sentinel/incidents", { headers: auth })).json();
+  }
+  async fetchAnomalies() {
+    const auth = await this.authHeader();
+    return (await fetch("/api/sentinel/anomalies", { headers: auth })).json();
+  }
+  async fetchStats() {
+    const auth = await this.authHeader();
+    return (await fetch("/api/sentinel/stats", { headers: auth })).json();
+  }
+  async fetchActions() {
+    const auth = await this.authHeader();
+    return (await fetch("/api/sentinel/recovery-actions", { headers: auth })).json();
+  }
 
   async analyze(id: string, force = false) {
+    const auth = await this.authHeader();
     const res = await fetch(`/api/sentinel/incidents/${id}/analyze`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.accessKey}` },
+      headers: { "Content-Type": "application/json", ...auth },
       body: JSON.stringify({ force }),
     });
     if (!res.ok) throw new Error(`Analyze failed: ${res.status}`);
@@ -113,18 +143,20 @@ class SentinelClientImpl {
   }
 
   async recover(id: string, action: string) {
+    const auth = await this.authHeader();
     const res = await fetch(`/api/sentinel/incidents/${id}/recover`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.accessKey}` },
+      headers: { "Content-Type": "application/json", ...auth },
       body: JSON.stringify({ action }),
     });
     return res.json();
   }
 
   async acknowledge(id: string) {
+    const auth = await this.authHeader();
     return (await fetch(`/api/sentinel/incidents/${id}/acknowledge`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${this.accessKey}` },
+      headers: { ...auth },
     })).json();
   }
 

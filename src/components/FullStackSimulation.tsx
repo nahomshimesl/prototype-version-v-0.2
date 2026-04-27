@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { motion, AnimatePresence } from 'motion/react';
-import { Microscope, Zap, ShieldAlert, BrainCircuit, AlertTriangle, LogIn, Send, Activity, FlaskConical, Thermometer, Droplets } from 'lucide-react';
+import { Microscope, Zap, ShieldAlert, BrainCircuit, AlertTriangle, LogIn, LogOut, Send, Activity, FlaskConical, Thermometer, Droplets } from 'lucide-react';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { auth, googleProvider, signInWithPopup, signOut } from '../firebase';
 
 interface SimulationResult {
   healthScore: number;
@@ -17,15 +19,17 @@ interface SimulationResult {
 }
 
 const FullStackSimulation: React.FC = () => {
-  const [password, setPassword] = useState('');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  // Operator identity is now per-user Firebase Auth — no more shared password.
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthorizing, setIsAuthorizing] = useState(true);
+  const [operatorEmail, setOperatorEmail] = useState<string | null>(null);
   const [loginError, setLoginError] = useState('');
-  
+
   const [glucose, setGlucose] = useState(5);
   const [oxygen, setOxygen] = useState(8);
   const [aminoAcids, setAminoAcids] = useState(4);
   const [temperature, setTemperature] = useState(37);
-  
+
   const [isSimulating, setIsSimulating] = useState(false);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
@@ -33,29 +37,72 @@ const FullStackSimulation: React.FC = () => {
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  const isLoggedIn = user !== null && operatorEmail !== null;
+
+  // Watch Firebase auth state and verify operator allow-list membership
+  // against the server. We deliberately verify on the server rather than
+  // trusting any client-side flag, so the allow-list lives in one place.
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      setLoginError('');
+      if (!u) {
+        setOperatorEmail(null);
+        setIsAuthorizing(false);
+        return;
+      }
+      setIsAuthorizing(true);
+      try {
+        const token = await u.getIdToken();
+        const res = await fetch('/api/auth/verify', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setOperatorEmail(data?.email ?? u.email ?? '(unknown)');
+        } else {
+          setOperatorEmail(null);
+          setLoginError(
+            'Your account is not on the operator allow-list. Ask an admin to add your email.',
+          );
+        }
+      } catch {
+        setOperatorEmail(null);
+        setLoginError('Could not verify operator status. Check your connection and try again.');
+      } finally {
+        setIsAuthorizing(false);
+      }
+    });
+    return () => unsub();
+  }, []);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoggingIn) return;
     setIsLoggingIn(true);
     setLoginError('');
-    
     try {
-      const response = await fetch('/api/auth/verify', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${password}`
-        }
-      });
-      
-      if (response.ok) {
-        setIsLoggedIn(true);
+      await signInWithPopup(auth, googleProvider);
+      // The onAuthStateChanged effect above runs the operator check.
+    } catch (err: any) {
+      if (err?.code === 'auth/popup-blocked') {
+        setLoginError('Popup blocked by your browser. Allow popups for this site and try again.');
+      } else if (err?.code === 'auth/popup-closed-by-user') {
+        setLoginError('Sign-in popup was closed before completion.');
       } else {
-        const errorData = await response.json().catch(() => null);
-        setLoginError(errorData?.error || 'Invalid access key.');
+        setLoginError('Sign-in failed. Please try again.');
       }
-    } catch (error) {
-      setLoginError('Connection failed.');
     } finally {
       setIsLoggingIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+    } catch {
+      // ignore
     }
   };
 
@@ -63,22 +110,25 @@ const FullStackSimulation: React.FC = () => {
     setIsSimulating(true);
     setAiAnalysis(null);
     try {
+      const u = auth.currentUser;
+      if (!u) throw new Error('Not signed in.');
+      const token = await u.getIdToken();
       const response = await fetch('/api/simulate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${password}`
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ glucose, oxygen, aminoAcids, temperature })
       });
-      
+
       if (!response.ok) {
         const text = await response.text();
         throw new Error(`Simulation failed: ${response.status} ${text}`);
       }
       const data = await response.json();
       setResult(data);
-      
+
       // Automatically trigger AI analysis
       analyzeWithAI(data);
     } catch (error) {
@@ -114,9 +164,10 @@ const FullStackSimulation: React.FC = () => {
   };
 
   if (!isLoggedIn) {
+    const signedInButNotAllowed = user !== null && operatorEmail === null && !isAuthorizing;
     return (
       <div className="flex items-center justify-center h-full bg-emerald-950 p-6">
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="w-full max-w-md bg-emerald-900/50 border border-emerald-800 p-8 rounded-3xl shadow-2xl backdrop-blur-xl"
@@ -125,31 +176,39 @@ const FullStackSimulation: React.FC = () => {
             <div className="w-16 h-16 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-500/20">
               <ShieldAlert className="text-white" size={32} />
             </div>
-            <h2 className="text-2xl font-bold text-white tracking-tight">Secure Access</h2>
-            <p className="text-emerald-400 text-sm text-center">Enter your research access key to initialize the full-stack simulation engine.</p>
+            <h2 className="text-2xl font-bold text-white tracking-tight">Operator Sign-In</h2>
+            <p className="text-emerald-400 text-sm text-center">
+              Operator access is per-user. Sign in with a Google account on the operator allow-list to initialize the full-stack simulation engine.
+            </p>
           </div>
-          
+
           <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <input 
-                type="password"
-                placeholder="Access Key"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-emerald-950/50 border border-emerald-800 rounded-xl py-3 px-4 text-white placeholder:text-emerald-700 focus:outline-none focus:border-emerald-500 transition-all"
-              />
-              {loginError && <p className="text-rose-500 text-[10px] mt-2 font-bold uppercase tracking-wider">{loginError}</p>}
-            </div>
-            <button 
+            {loginError && (
+              <p className="text-rose-400 text-xs font-medium bg-rose-950/40 border border-rose-900/60 rounded-xl px-3 py-2">
+                {loginError}
+              </p>
+            )}
+            <button
               type="submit"
-              disabled={isLoggingIn}
+              disabled={isLoggingIn || isAuthorizing}
               className="w-full py-3 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50"
             >
               <LogIn size={18} />
-              {isLoggingIn ? 'Verifying...' : 'Initialize Session'}
+              {isAuthorizing ? 'Verifying operator status…' : isLoggingIn ? 'Opening Google sign-in…' : 'Sign in with Google'}
             </button>
+            {signedInButNotAllowed && (
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="w-full py-2 text-emerald-300 hover:text-emerald-100 text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2"
+              >
+                <LogOut size={14} /> Sign out ({user?.email})
+              </button>
+            )}
           </form>
-          <p className="text-[10px] text-emerald-700 mt-6 text-center uppercase tracking-widest">Default Key: organoid2026</p>
+          <p className="text-[10px] text-emerald-700 mt-6 text-center uppercase tracking-widest">
+            Operator allow-list managed via OPERATOR_EMAILS — see DEPLOY.md
+          </p>
         </motion.div>
       </div>
     );
@@ -167,9 +226,21 @@ const FullStackSimulation: React.FC = () => {
             <p className="text-[10px] text-emerald-500 uppercase tracking-widest">Full-Stack Prototype v1.0</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 px-3 py-1 bg-emerald-900/50 border border-emerald-800 rounded-full">
-          <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-          <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Backend Connected</span>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 px-3 py-1 bg-emerald-900/50 border border-emerald-800 rounded-full">
+            <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
+              Operator: {operatorEmail}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleSignOut}
+            title="Sign out"
+            className="p-1.5 rounded-full bg-emerald-900/50 border border-emerald-800 text-emerald-400 hover:text-white hover:bg-emerald-800/60 transition-colors"
+          >
+            <LogOut size={12} />
+          </button>
         </div>
       </div>
 
