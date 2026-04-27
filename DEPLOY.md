@@ -73,6 +73,35 @@ To set environment variables on Render: dashboard → your service → **Environ
 
 > ⚠️ **Why per-user instead of a shared password:** the previous `APP_PASSWORD` model meant anyone with the password was indistinguishable from anyone else, there was no audit trail, and revoking access for one person required rotating the password for everyone. Per-user Firebase Auth gives real identity, instant revocation by editing the allow-list, and a per-request audit trail.
 
+## Installable app (PWA) — Chromebook & desktop
+
+BOSS ships as a **Progressive Web App**, so once you've deployed it to a public HTTPS URL (Render gives you one for free), users can install it like a native app.
+
+### Regular Chromebook / desktop Chrome / Edge
+
+1. Open the BOSS URL in Chrome.
+2. Look for the **install icon** in the address bar (a small monitor with a downward arrow), or open the **⋮ menu → Install BOSS…**
+3. Click **Install**. BOSS appears on the launcher / shelf / desktop with the lab icon and opens in its own window — no browser tabs, no URL bar.
+
+The installed app re-uses the same dark theme so there's no white flash on launch, and a service worker pre-caches the app shell so the boot screen and UI keep loading even if the network briefly drops. (Live simulation features still need the server, of course — they show their normal offline error states.)
+
+### Managed Chromebook fleets (schools, districts, kiosks)
+
+If you administer a fleet of locked-down Chromebooks via Google Workspace, you can push BOSS to every device silently — no student install permission required.
+
+1. Sign in to **https://admin.google.com**.
+2. **Devices → Chrome → Apps & extensions → Users & browsers** (or **Kiosks** for single-app kiosk mode).
+3. Pick the org unit you want BOSS on (e.g. "Students / Biology Class").
+4. Click the yellow **+** button → **Add Chrome app or extension by URL** → paste your BOSS URL (e.g. `https://boss-organoid.onrender.com`).
+5. Set **Installation policy** to **Force install** (silent), and set **Default launch container** to **Window** so it opens standalone instead of in a tab.
+6. Save. Within a few minutes, every Chromebook in that org unit gets BOSS on its launcher.
+
+Notes for managed deploys:
+
+- **Operator features still gate on the allow-list.** A pushed install does not automatically grant operator powers — students get the read-only public view by default. To grant operator status, add their school Google account to `OPERATOR_EMAILS` (or invite them via the in-app **Admin** tab if you're an owner). Their Google sign-in inside the installed app uses the Chromebook's signed-in account.
+- **Updates are silent.** Every redeploy auto-updates the installed PWA on next launch — no need to repush from Google Admin.
+- **Network**: The app shell works briefly offline, but the live simulation engine and history database require connectivity, so don't mark BOSS as "offline-capable" in classroom plans.
+
 ## Free-tier note
 Render's free plan sleeps the service after ~15 minutes of inactivity and cold-starts in ~30 seconds on the next request. The $7/mo "Starter" plan removes the sleep behavior. Your simulation state is **in-memory only**, so a sleep/restart will reset session-bound data — keep this in mind for live demos.
 

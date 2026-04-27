@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="organoid" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="55%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#064e3b"/>
+    </radialGradient>
+    <radialGradient id="cell" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a7f3d0" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0.4"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#34d399" stop-opacity="0.2"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="#020617"/>
+  <circle cx="256" cy="256" r="190" fill="none" stroke="url(#ring)" stroke-width="4" opacity="0.55"/>
+  <circle cx="256" cy="256" r="160" fill="none" stroke="#10b981" stroke-width="2" stroke-dasharray="3 6" opacity="0.45"/>
+  <circle cx="256" cy="256" r="135" fill="url(#organoid)"/>
+  <circle cx="225" cy="232" r="22" fill="url(#cell)"/>
+  <circle cx="225" cy="232" r="8"  fill="#022c22" opacity="0.9"/>
+  <circle cx="285" cy="248" r="18" fill="url(#cell)"/>
+  <circle cx="285" cy="248" r="6"  fill="#022c22" opacity="0.9"/>
+  <circle cx="248" cy="289" r="20" fill="url(#cell)"/>
+  <circle cx="248" cy="289" r="7"  fill="#022c22" opacity="0.9"/>
+  <circle cx="280" cy="210" r="11" fill="url(#cell)"/>
+  <circle cx="210" cy="278" r="10" fill="url(#cell)"/>
+  <text x="256" y="430" font-family="ui-monospace, Menlo, Consolas, monospace"
+        font-size="62" font-weight="700" letter-spacing="6"
+        text-anchor="middle" fill="#34d399">BOSS</text>
+</svg>
